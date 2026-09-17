@@ -9,6 +9,6 @@ pub mod fact_id;
 pub mod protocol;
 pub mod receipt;
 
-pub use fact_id::{FactId, FactSet};
+pub use fact_id::{canonical_json, fact_id_from_json, fact_id_from_str, FactId, FactIdError, FactSet};
 pub use protocol::{IntersectionMode, PsiProtocol, PsiResult};
 pub use receipt::{IntersectionReceipt, ReceiptSigner, ReceiptVerifier};
