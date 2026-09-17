@@ -84,6 +84,7 @@ dependencies = [
 name = "blindoverlap-cli"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "blindoverlap",
  "clap",
  "hex",
