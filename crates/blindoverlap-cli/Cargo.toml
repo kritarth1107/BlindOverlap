@@ -1,0 +1,18 @@
+[package]
+name = "blindoverlap-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "CLI for BlindOverlap private set intersection"
+
+[[bin]]
+name = "blindoverlap"
+path = "src/main.rs"
+
+[dependencies]
+blindoverlap = { workspace = true }
+clap = { workspace = true }
+hex = { workspace = true }
+serde_json = { workspace = true }
