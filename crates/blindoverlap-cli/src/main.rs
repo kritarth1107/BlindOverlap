@@ -145,7 +145,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             mode,
             key_seed,
             output,
-        } => cmd_receipt_sign(&root_a, &root_b, &result, &mode, key_seed.as_deref(), output.as_deref())?,
+        } => cmd_receipt_sign(
+            &root_a,
+            &root_b,
+            &result,
+            &mode,
+            key_seed.as_deref(),
+            output.as_deref(),
+        )?,
 
         Commands::ReceiptVerify {
             receipt,
@@ -159,7 +166,11 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn cmd_encode(input: &str, format: &str, with_root: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_encode(
+    input: &str,
+    format: &str,
+    with_root: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let reader: Box<dyn BufRead> = if input == "-" {
         Box::new(io::stdin().lock())
     } else {
@@ -298,7 +309,10 @@ fn cmd_receipt_sign(
     }
 
     eprintln!("receipt_id: {}", hex::encode(receipt.receipt_id()));
-    eprintln!("signer_public_key: {}", hex::encode(receipt.signer_public_key));
+    eprintln!(
+        "signer_public_key: {}",
+        hex::encode(receipt.signer_public_key)
+    );
 
     Ok(())
 }
@@ -333,7 +347,10 @@ fn cmd_receipt_verify(
     println!("  mode: {:?}", receipt.mode);
     println!("  set_root_a: {}", hex::encode(receipt.set_root_a));
     println!("  set_root_b: {}", hex::encode(receipt.set_root_b));
-    println!("  result_commitment: {}", hex::encode(receipt.result_commitment));
+    println!(
+        "  result_commitment: {}",
+        hex::encode(receipt.result_commitment)
+    );
     println!("  signer: {}", hex::encode(receipt.signer_public_key));
     println!("  receipt_id: {}", hex::encode(receipt.receipt_id()));
 
@@ -364,7 +381,9 @@ fn load_fact_ids(path: &std::path::Path) -> Result<Vec<[u8; 32]>, Box<dyn std::e
     load_fact_ids_from_reader(reader)
 }
 
-fn load_fact_ids_from_reader<R: BufRead>(reader: R) -> Result<Vec<[u8; 32]>, Box<dyn std::error::Error>> {
+fn load_fact_ids_from_reader<R: BufRead>(
+    reader: R,
+) -> Result<Vec<[u8; 32]>, Box<dyn std::error::Error>> {
     let mut ids = Vec::new();
     for line in reader.lines() {
         let line = line?;

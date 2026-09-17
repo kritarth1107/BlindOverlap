@@ -74,7 +74,9 @@ mod hex_bytes_32 {
     {
         let s = String::deserialize(deserializer)?;
         let bytes = hex::decode(&s).map_err(serde::de::Error::custom)?;
-        bytes.try_into().map_err(|_| serde::de::Error::custom("expected 32 bytes"))
+        bytes
+            .try_into()
+            .map_err(|_| serde::de::Error::custom("expected 32 bytes"))
     }
 }
 
@@ -94,7 +96,9 @@ mod hex_bytes_64 {
     {
         let s = String::deserialize(deserializer)?;
         let bytes = hex::decode(&s).map_err(serde::de::Error::custom)?;
-        bytes.try_into().map_err(|_| serde::de::Error::custom("expected 64 bytes"))
+        bytes
+            .try_into()
+            .map_err(|_| serde::de::Error::custom("expected 64 bytes"))
     }
 }
 
@@ -291,7 +295,12 @@ mod tests {
             .unwrap();
 
         let signer = ReceiptSigner::new();
-        let receipt = signer.sign(set_a.root(), set_b.root(), &result, IntersectionMode::Intersection);
+        let receipt = signer.sign(
+            set_a.root(),
+            set_b.root(),
+            &result,
+            IntersectionMode::Intersection,
+        );
 
         let verifier = ReceiptVerifier::new();
         assert!(verifier.verify(&receipt).is_ok());
@@ -311,7 +320,12 @@ mod tests {
             .unwrap();
 
         let signer = ReceiptSigner::new();
-        let mut receipt = signer.sign(set_a.root(), set_b.root(), &result, IntersectionMode::Cardinality);
+        let mut receipt = signer.sign(
+            set_a.root(),
+            set_b.root(),
+            &result,
+            IntersectionMode::Cardinality,
+        );
 
         receipt.signature[0] ^= 0xFF;
 
@@ -334,7 +348,12 @@ mod tests {
             .unwrap();
 
         let signer = ReceiptSigner::new();
-        let receipt = signer.sign(set_a.root(), set_b.root(), &result, IntersectionMode::Intersection);
+        let receipt = signer.sign(
+            set_a.root(),
+            set_b.root(),
+            &result,
+            IntersectionMode::Intersection,
+        );
 
         let verifier = ReceiptVerifier::new();
         assert!(matches!(

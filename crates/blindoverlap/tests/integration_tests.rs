@@ -188,7 +188,12 @@ fn test_receipt_serialization_roundtrip() {
         .unwrap();
 
     let signer = ReceiptSigner::new();
-    let receipt = signer.sign(set_a.root(), set_b.root(), &result, IntersectionMode::Intersection);
+    let receipt = signer.sign(
+        set_a.root(),
+        set_b.root(),
+        &result,
+        IntersectionMode::Intersection,
+    );
 
     let json_str = serde_json::to_string(&receipt).unwrap();
     let deserialized: IntersectionReceipt = serde_json::from_str(&json_str).unwrap();
@@ -210,7 +215,12 @@ fn test_receipt_wrong_public_key() {
         .unwrap();
 
     let signer = ReceiptSigner::new();
-    let mut receipt = signer.sign(set_a.root(), set_b.root(), &result, IntersectionMode::Intersection);
+    let mut receipt = signer.sign(
+        set_a.root(),
+        set_b.root(),
+        &result,
+        IntersectionMode::Intersection,
+    );
 
     receipt.signer_public_key[0] ^= 0xFF;
 
@@ -229,7 +239,12 @@ fn test_receipt_cardinality_mode() {
         .unwrap();
 
     let signer = ReceiptSigner::new();
-    let receipt = signer.sign(set_a.root(), set_b.root(), &result, IntersectionMode::Cardinality);
+    let receipt = signer.sign(
+        set_a.root(),
+        set_b.root(),
+        &result,
+        IntersectionMode::Cardinality,
+    );
 
     let verifier = ReceiptVerifier::new();
     assert!(verifier.verify(&receipt).is_ok());
@@ -249,8 +264,18 @@ fn test_receipt_id_uniqueness() {
     let signer1 = ReceiptSigner::new();
     let signer2 = ReceiptSigner::new();
 
-    let receipt1 = signer1.sign(set_a.root(), set_b.root(), &result, IntersectionMode::Intersection);
-    let receipt2 = signer2.sign(set_a.root(), set_b.root(), &result, IntersectionMode::Intersection);
+    let receipt1 = signer1.sign(
+        set_a.root(),
+        set_b.root(),
+        &result,
+        IntersectionMode::Intersection,
+    );
+    let receipt2 = signer2.sign(
+        set_a.root(),
+        set_b.root(),
+        &result,
+        IntersectionMode::Intersection,
+    );
 
     assert_ne!(receipt1.receipt_id(), receipt2.receipt_id());
 }
@@ -323,9 +348,8 @@ fn test_psi_known_overlap_random() {
     let protocol = PsiProtocol::new();
     let mut rng = rand::thread_rng();
 
-    let common: Vec<serde_json::Value> = (0..5)
-        .map(|i| json!({"common": true, "idx": i}))
-        .collect();
+    let common: Vec<serde_json::Value> =
+        (0..5).map(|i| json!({"common": true, "idx": i})).collect();
 
     let unique_a: Vec<serde_json::Value> = (0..rng.gen_range(5..20))
         .map(|i| json!({"set": "a", "unique": i}))
@@ -370,7 +394,12 @@ fn test_set_root_mismatch_detection() {
         .unwrap();
 
     let signer = ReceiptSigner::new();
-    let receipt = signer.sign(set_a.root(), set_b.root(), &result, IntersectionMode::Intersection);
+    let receipt = signer.sign(
+        set_a.root(),
+        set_b.root(),
+        &result,
+        IntersectionMode::Intersection,
+    );
 
     let verifier = ReceiptVerifier::new();
 

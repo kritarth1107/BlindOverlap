@@ -9,10 +9,10 @@ pub mod fact_id;
 pub mod protocol;
 pub mod receipt;
 
-pub use fact_id::{canonical_json, fact_id_from_json, fact_id_from_str, FactId, FactIdError, FactSet};
+pub use fact_id::{
+    canonical_json, fact_id_from_json, fact_id_from_str, FactId, FactIdError, FactSet,
+};
 pub use protocol::{
     IntersectionMode, MaskedElement, PsiError, PsiParty, PsiProtocol, PsiResult, MAX_SET_SIZE,
 };
-pub use receipt::{
-    IntersectionReceipt, ReceiptError, ReceiptMode, ReceiptSigner, ReceiptVerifier,
-};
+pub use receipt::{IntersectionReceipt, ReceiptError, ReceiptMode, ReceiptSigner, ReceiptVerifier};
