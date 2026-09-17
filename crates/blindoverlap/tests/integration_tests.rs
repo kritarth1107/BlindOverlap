@@ -88,8 +88,8 @@ fn test_psi_single_element_match() {
     let protocol = PsiProtocol::new();
     let common = json!({"shared": true});
 
-    let set_a = make_set(&[common.clone()]);
-    let set_b = make_set(&[common]);
+    let set_a = make_set(std::slice::from_ref(&common));
+    let set_b = make_set(std::slice::from_ref(&common));
 
     let result = protocol
         .intersect(&set_a, &set_b, IntersectionMode::Intersection)
