@@ -1,6 +1,6 @@
 # BlindOverlap Threat Model
 
-This document describes the security model, assumptions, and known limitations of BlindOverlap v0.1.0.
+This document describes the security model, assumptions, and known limitations of BlindOverlap v0.2.0.
 
 ## Security Model: Semi-Honest
 
@@ -21,7 +21,7 @@ BlindOverlap operates under a **semi-honest (honest-but-curious) security model*
 - The intersection of the two sets (in Intersection mode)
 - The cardinality of the intersection (in Cardinality mode)
 - The size of their own set
-- The size of the other party's set (from message count)
+- The size of the other party's set (from message count, unless padding is used)
 
 ### What Semi-Honest Security Does NOT Provide
 
@@ -84,6 +84,60 @@ For sensitive applications, consider:
 - Bucketing cardinality into ranges
 - Using full intersection mode when count alone is sensitive
 
+## Set-Size Padding (v0.2.0)
+
+BlindOverlap v0.2.0 introduces **set-size padding** to hide the real set cardinality from wire message length analysis.
+
+### How Padding Works
+
+- Dummy elements are generated using HMAC-SHA256 with a domain-separated PRF
+- Elements are padded to a target size before transmission
+- The padding secret must be kept confidential
+
+### Padding Limitations
+
+⚠️ **Padding is best-effort under the semi-honest model only.**
+
+- A semi-honest party cannot distinguish real elements from padding in the wire message
+- A malicious party could still learn information through:
+  - Protocol deviations (sending subset queries)
+  - Timing analysis of processing time
+  - Observing which elements match in the result
+  
+- Padding does NOT:
+  - Provide full size-hiding against active adversaries
+  - Prevent intersection result from revealing overlap
+  - Hide the number of *matching* elements
+
+### Recommended Padding Practices
+
+- Pad to fixed power-of-2 sizes (64, 256, 1024, 4096)
+- Use the same padding size across all sessions
+- Keep padding secrets confidential and session-specific
+- Do not rely on padding for security-critical size hiding
+
+## Wire Protocol Surface (v0.2.0)
+
+The wire protocol introduces additional attack surface:
+
+### Message Integrity
+
+- Messages are JSON-serialized with hex-encoded elements
+- No built-in message authentication or encryption
+- **Use TLS** for transport security in production
+
+### Session Management
+
+- Session IDs correlate multi-round exchanges
+- No built-in session expiry or replay protection
+- Applications should implement their own session management
+
+### Denial of Service
+
+- No rate limiting built-in
+- Large messages could cause memory exhaustion
+- The 4096 element limit provides some protection
+
 ## Scale Limitations
 
 BlindOverlap enforces a **4,096 element maximum** per set.
@@ -116,6 +170,11 @@ BlindOverlap's security relies on:
 - Pre-image resistance
 - Second pre-image resistance
 
+### HMAC-SHA256 (for padding)
+
+- PRF security under the CDH assumption
+- Key must be kept secret
+
 ### Ed25519
 
 - Existential unforgeability under chosen message attack (EUF-CMA)
@@ -130,7 +189,8 @@ BlindOverlap's security relies on:
 | Set enumeration by malicious party | ⚠️ Yes | Attacker can probe for specific elements |
 | Fake element injection | ⚠️ Yes | No verification of element validity |
 | Replay attacks | ⚠️ Possible | No built-in freshness guarantees |
-| Set size inference | ✅ Always | Message count reveals set size |
+| Set size inference | ✅ Always | Unless padding is used |
+| Padded set size inference | ⚠️ Semi-honest | Malicious party may still learn |
 
 ### Implementation-Level
 
@@ -140,6 +200,14 @@ BlindOverlap's security relies on:
 | Memory side channels | ⚠️ Not hardened | No memory clearing |
 | Key reuse | ⚠️ Risk | Fresh keys recommended per session |
 
+### Wire Protocol (v0.2.0)
+
+| Attack | Status | Notes |
+|--------|--------|-------|
+| Message tampering | ⚠️ Possible | Use TLS for transport security |
+| Session hijacking | ⚠️ Possible | No built-in authentication |
+| Message replay | ⚠️ Possible | Application must handle |
+
 ## Recommendations for Users
 
 1. **Understand the threat model** before using in any application
@@ -148,16 +216,19 @@ BlindOverlap's security relies on:
 4. **Don't trust cardinality alone** for sensitive decisions
 5. **Limit set sizes** to reasonable amounts
 6. **Audit the code** if using for anything beyond experimentation
+7. **Use TLS** for network transport (v0.2.0)
+8. **Use padding** if set size is sensitive (v0.2.0)
+9. **Keep padding secrets confidential** (v0.2.0)
 
 ## Future Considerations
 
-Potential improvements (not in scope for v0.1.0):
+Potential improvements (not in scope for v0.2.0):
 
 - Malicious security via VOLE-PSI or zkSNARKs
 - Constant-time implementations
 - Differential privacy for cardinality
 - Streaming/batched protocols for larger sets
-- Network protocol with transport security
+- Built-in TLS transport
 - Formal security proofs
 
 ## References
@@ -168,4 +239,4 @@ Potential improvements (not in scope for v0.1.0):
 
 ---
 
-**Last Updated**: v0.1.0
+**Last Updated**: v0.2.0
