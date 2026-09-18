@@ -1,8 +1,10 @@
 //! Comprehensive integration tests for BlindOverlap.
 
 use blindoverlap::{
-    canonical_json, fact_id_from_json, fact_id_from_str, FactSet, IntersectionMode,
-    IntersectionReceipt, PsiProtocol, PsiResult, ReceiptSigner, ReceiptVerifier,
+    canonical_json, fact_id_from_json, fact_id_from_str, pad_masked_elements, wire_decode,
+    wire_encode, FactSet, InitiatorSession, IntersectionMode, IntersectionReceipt,
+    MaskedSetOffer, MaskedSetReply, PaddingConfig, PsiProtocol, PsiResult, ReceiptSigner,
+    ReceiptVerifier, ResponderSession, WireMessage,
 };
 use serde_json::json;
 
@@ -432,4 +434,225 @@ fn test_result_commitment_integrity() {
     let commitment2 = result2.commitment();
 
     assert_eq!(commitment, commitment2);
+}
+
+// === Wire Protocol Tests ===
+
+#[test]
+fn test_wire_roundtrip_with_session_data() {
+    let set_a = make_set(&[json!({"x": 1}), json!({"x": 2}), json!({"x": 3})]);
+
+    let mut session =
+        InitiatorSession::new("wire-test", set_a, IntersectionMode::Intersection).unwrap();
+    let offer = session.generate_offer().unwrap();
+
+    let message = WireMessage::Offer(offer.clone());
+    let json = wire_encode(&message).unwrap();
+
+    let decoded = wire_decode(&json).unwrap();
+    match decoded {
+        WireMessage::Offer(decoded_offer) => {
+            assert_eq!(decoded_offer.session_id, offer.session_id);
+            assert_eq!(decoded_offer.masked_elements.len(), offer.masked_elements.len());
+            assert_eq!(decoded_offer.masked_elements, offer.masked_elements);
+        }
+        _ => panic!("expected offer message"),
+    }
+}
+
+#[test]
+fn test_wire_reply_roundtrip() {
+    let reply = MaskedSetReply::new(
+        "test-session",
+        vec![[1u8; 32], [2u8; 32]],
+        vec![[3u8; 32], [4u8; 32], [5u8; 32]],
+    );
+
+    let message = WireMessage::Reply(reply.clone());
+    let json = wire_encode(&message).unwrap();
+    let decoded = wire_decode(&json).unwrap();
+
+    match decoded {
+        WireMessage::Reply(decoded_reply) => {
+            assert_eq!(decoded_reply.session_id, reply.session_id);
+            assert_eq!(decoded_reply.responder_masked.len(), 2);
+            assert_eq!(decoded_reply.initiator_doubly_masked.len(), 3);
+        }
+        _ => panic!("expected reply message"),
+    }
+}
+
+// === Online Session Tests ===
+
+#[test]
+fn test_online_session_correctness_vs_colocated() {
+    let set_a = make_set(&[json!({"x": 1}), json!({"x": 2}), json!({"x": 3})]);
+    let set_b = make_set(&[json!({"x": 2}), json!({"x": 3}), json!({"x": 4})]);
+
+    let protocol = PsiProtocol::new();
+    let colocated = protocol
+        .intersect(&set_a, &set_b, IntersectionMode::Intersection)
+        .unwrap();
+
+    let mut initiator =
+        InitiatorSession::new("correctness-test", set_a.clone(), IntersectionMode::Intersection)
+            .unwrap();
+    let mut responder =
+        ResponderSession::new("correctness-test", set_b.clone(), IntersectionMode::Intersection)
+            .unwrap();
+
+    let offer = initiator.generate_offer().unwrap();
+    let reply = responder.process_offer_and_reply(&offer).unwrap();
+    let online = initiator.process_reply(&reply).unwrap();
+
+    let colocated_count = match &colocated {
+        PsiResult::Intersection { ids, .. } => ids.len(),
+        _ => panic!(),
+    };
+    let online_count = match &online {
+        PsiResult::Intersection { ids, .. } => ids.len(),
+        _ => panic!(),
+    };
+
+    assert_eq!(colocated_count, online_count);
+    assert_eq!(colocated_count, 2);
+}
+
+#[test]
+fn test_online_bilateral_intersection() {
+    let set_a = make_set(&[json!({"shared": 1}), json!({"only_a": 1})]);
+    let set_b = make_set(&[json!({"shared": 1}), json!({"only_b": 1})]);
+
+    let mut initiator =
+        InitiatorSession::new("bilateral-test", set_a, IntersectionMode::Intersection).unwrap();
+    let mut responder =
+        ResponderSession::new("bilateral-test", set_b, IntersectionMode::Intersection).unwrap();
+
+    let offer = initiator.generate_offer().unwrap();
+    let reply = responder.process_offer_and_reply(&offer).unwrap();
+    let initiator_result = initiator.process_reply(&reply).unwrap();
+
+    let reveal = initiator.generate_reveal().unwrap();
+    let responder_result = responder.process_reveal(&reveal).unwrap();
+
+    let init_ids = match initiator_result {
+        PsiResult::Intersection { ids, .. } => ids,
+        _ => panic!(),
+    };
+    let resp_ids = match responder_result {
+        PsiResult::Intersection { ids, .. } => ids,
+        _ => panic!(),
+    };
+
+    assert_eq!(init_ids.len(), 1);
+    assert_eq!(resp_ids.len(), 1);
+    assert_eq!(init_ids, resp_ids);
+}
+
+// === Padding Tests ===
+
+#[test]
+fn test_padding_length_invariance() {
+    let config = PaddingConfig::new(100, b"test-secret".to_vec());
+
+    for real_size in [1, 10, 50, 99, 100] {
+        let elements: Vec<[u8; 32]> = (0..real_size)
+            .map(|i| {
+                let mut elem = [0u8; 32];
+                elem[0] = i as u8;
+                elem
+            })
+            .collect();
+
+        let padded = pad_masked_elements(&elements, &config, b"ctx").unwrap();
+        assert_eq!(
+            padded.len(),
+            100,
+            "size {real_size} should pad to 100"
+        );
+    }
+}
+
+#[test]
+fn test_padding_preserves_original_elements() {
+    let config = PaddingConfig::new(50, b"secret".to_vec());
+
+    let original: Vec<[u8; 32]> = (0..10)
+        .map(|i| {
+            let mut elem = [0u8; 32];
+            elem[0] = i;
+            elem[1] = 0xFF;
+            elem
+        })
+        .collect();
+
+    let padded = pad_masked_elements(&original, &config, b"ctx").unwrap();
+
+    assert_eq!(padded.len(), 50);
+    assert_eq!(&padded[..10], &original);
+}
+
+#[test]
+fn test_padded_online_intersect_end_to_end() {
+    let set_a = make_set(&[json!({"x": 1}), json!({"x": 2})]);
+    let set_b = make_set(&[json!({"x": 2}), json!({"x": 3}), json!({"x": 4})]);
+
+    let mut initiator =
+        InitiatorSession::new("padded-test", set_a, IntersectionMode::Intersection).unwrap();
+    let mut responder =
+        ResponderSession::new("padded-test", set_b, IntersectionMode::Intersection).unwrap();
+
+    let offer = initiator.generate_offer().unwrap();
+
+    let config = PaddingConfig::new(64, b"padding-secret".to_vec());
+    let padded_offer_elements =
+        pad_masked_elements(&offer.masked_elements, &config, b"padded-test").unwrap();
+
+    assert_eq!(padded_offer_elements.len(), 64);
+
+    let padded_offer = MaskedSetOffer::new("padded-test", padded_offer_elements);
+    let reply = responder.process_offer_and_reply(&padded_offer).unwrap();
+
+    let original_reply = MaskedSetReply::new(
+        "padded-test",
+        reply.responder_masked.clone(),
+        reply.initiator_doubly_masked[..2].to_vec(),
+    );
+
+    let result = initiator.process_reply(&original_reply).unwrap();
+
+    match result {
+        PsiResult::Intersection { ids, .. } => {
+            assert_eq!(ids.len(), 1, "should find 1 common element");
+        }
+        _ => panic!("expected intersection result"),
+    }
+}
+
+#[test]
+fn test_wire_with_padding_roundtrip() {
+    let elements: Vec<[u8; 32]> = (0..5)
+        .map(|i| {
+            let mut elem = [0u8; 32];
+            elem[0] = i;
+            elem
+        })
+        .collect();
+
+    let config = PaddingConfig::new(32, b"secret".to_vec());
+    let padded = pad_masked_elements(&elements, &config, b"session").unwrap();
+
+    let offer = MaskedSetOffer::new("padded-session", padded.clone());
+    let message = WireMessage::Offer(offer);
+
+    let json = wire_encode(&message).unwrap();
+    let decoded = wire_decode(&json).unwrap();
+
+    match decoded {
+        WireMessage::Offer(decoded_offer) => {
+            assert_eq!(decoded_offer.masked_elements.len(), 32);
+            assert_eq!(&decoded_offer.masked_elements[..5], &elements);
+        }
+        _ => panic!("expected offer"),
+    }
 }
