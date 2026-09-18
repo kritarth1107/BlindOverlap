@@ -315,8 +315,7 @@ mod tests {
         let offer = WireMessage::Offer(MaskedSetOffer::new("offer-session", vec![]));
         assert_eq!(offer.session_id(), "offer-session");
 
-        let reply =
-            WireMessage::Reply(MaskedSetReply::new("reply-session", vec![], vec![]));
+        let reply = WireMessage::Reply(MaskedSetReply::new("reply-session", vec![], vec![]));
         assert_eq!(reply.session_id(), "reply-session");
 
         let reveal = WireMessage::Reveal(IntersectionReveal::new("reveal-session", vec![]));

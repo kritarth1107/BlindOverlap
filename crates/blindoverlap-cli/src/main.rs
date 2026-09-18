@@ -609,7 +609,9 @@ fn cmd_wire_encode(
     let masked = if role == "initiator" {
         offer.masked_elements.clone()
     } else {
-        return Err("wire-encode only supports initiator role (use online-reply for responder)".into());
+        return Err(
+            "wire-encode only supports initiator role (use online-reply for responder)".into(),
+        );
     };
 
     let final_masked = if let Some(target) = pad_to {
@@ -648,7 +650,10 @@ fn cmd_wire_encode(
     Ok(())
 }
 
-fn cmd_wire_decode(input: &std::path::Path, summary: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn cmd_wire_decode(
+    input: &std::path::Path,
+    summary: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let json = fs::read_to_string(input)?;
     let message = wire_decode(&json)?;
 
@@ -809,7 +814,11 @@ fn cmd_online_reply(
             config.padding_secret
         };
         let config = PaddingConfig::new(target, secret_bytes);
-        pad_masked_elements(&reply.responder_masked, &config, offer.session_id.as_bytes())?
+        pad_masked_elements(
+            &reply.responder_masked,
+            &config,
+            offer.session_id.as_bytes(),
+        )?
     } else {
         reply.responder_masked.clone()
     };
@@ -877,10 +886,7 @@ fn cmd_online_complete(
         .map(|s| {
             hex::decode(s)
                 .map_err(|e| format!("hex decode error: {e}"))
-                .and_then(|b| {
-                    b.try_into()
-                        .map_err(|_| "expected 32 bytes".to_string())
-                })
+                .and_then(|b| b.try_into().map_err(|_| "expected 32 bytes".to_string()))
         })
         .collect::<Result<Vec<_>, _>>()?;
     let fact_set = FactSet::from_ids(fact_ids);
@@ -953,10 +959,7 @@ fn cmd_online_reveal(
         .map(|s| {
             hex::decode(s)
                 .map_err(|e| format!("hex decode error: {e}"))
-                .and_then(|b| {
-                    b.try_into()
-                        .map_err(|_| "expected 32 bytes".to_string())
-                })
+                .and_then(|b| b.try_into().map_err(|_| "expected 32 bytes".to_string()))
         })
         .collect::<Result<Vec<_>, _>>()?;
     let fact_set = FactSet::from_ids(fact_ids);
@@ -965,7 +968,10 @@ fn cmd_online_reveal(
         .try_into()
         .map_err(|_| "secret must be 32 bytes")?;
 
-    let offer = MaskedSetOffer::new(&state.session_id, vec![[0u8; 32]; state.initiator_doubly_masked_hex.len()]);
+    let offer = MaskedSetOffer::new(
+        &state.session_id,
+        vec![[0u8; 32]; state.initiator_doubly_masked_hex.len()],
+    );
     let mut session_obj =
         ResponderSession::with_secret(&state.session_id, fact_set, int_mode, secret)?;
 
