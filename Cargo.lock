@@ -89,6 +89,8 @@ dependencies = [
  "blindoverlap",
  "clap",
  "hex",
+ "rand",
+ "serde",
  "serde_json",
 ]
 

@@ -1,8 +1,10 @@
 //! BlindOverlap CLI - Private set intersection over content-addressed fact IDs.
 
 use blindoverlap::{
-    canonical_json, fact_id_from_str, FactSet, IntersectionMode, IntersectionReceipt, PsiProtocol,
-    ReceiptSigner, ReceiptVerifier,
+    canonical_json, fact_id_from_str, pad_masked_elements, wire_decode, wire_encode,
+    wire_encode_pretty, FactSet, InitiatorSession, IntersectionMode, IntersectionReceipt,
+    MaskedSetOffer, MaskedSetReply, PaddingConfig, PsiProtocol, PsiResult, ReceiptSigner,
+    ReceiptVerifier, ResponderSession, WireMessage,
 };
 use clap::{Parser, Subcommand};
 use std::fs;
@@ -110,6 +112,148 @@ enum Commands {
         #[arg(short, long, default_value = "-")]
         input: String,
     },
+
+    /// Encode a wire protocol message (initiator offer)
+    WireEncode {
+        /// File containing fact IDs (hex, one per line)
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Session ID for the exchange
+        #[arg(long)]
+        session: String,
+
+        /// Role: initiator or responder
+        #[arg(long, default_value = "initiator")]
+        role: String,
+
+        /// Pad to target size (hides real set size)
+        #[arg(long)]
+        pad_to: Option<usize>,
+
+        /// Padding secret (hex, for deterministic padding). Random if not provided.
+        #[arg(long)]
+        pad_secret: Option<String>,
+
+        /// Output file (default: stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Pretty-print JSON output
+        #[arg(long)]
+        pretty: bool,
+    },
+
+    /// Decode and display a wire protocol message
+    WireDecode {
+        /// Wire message file (JSON)
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Show only summary (default: show full message)
+        #[arg(long)]
+        summary: bool,
+    },
+
+    /// Generate initiator offer message
+    OnlineOffer {
+        /// File containing fact IDs (hex, one per line)
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Session ID for the exchange
+        #[arg(long)]
+        session: String,
+
+        /// Mode: intersection or cardinality
+        #[arg(long, default_value = "intersection")]
+        mode: String,
+
+        /// Pad to target size
+        #[arg(long)]
+        pad_to: Option<usize>,
+
+        /// Padding secret (hex)
+        #[arg(long)]
+        pad_secret: Option<String>,
+
+        /// Output file for offer message (default: stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Output file for session state (required for later steps)
+        #[arg(long)]
+        state_out: PathBuf,
+    },
+
+    /// Process offer and generate reply (responder)
+    OnlineReply {
+        /// File containing fact IDs (hex, one per line)
+        #[arg(short, long)]
+        input: PathBuf,
+
+        /// Offer message file (JSON)
+        #[arg(long)]
+        offer: PathBuf,
+
+        /// Mode: intersection or cardinality
+        #[arg(long, default_value = "intersection")]
+        mode: String,
+
+        /// Pad to target size
+        #[arg(long)]
+        pad_to: Option<usize>,
+
+        /// Padding secret (hex)
+        #[arg(long)]
+        pad_secret: Option<String>,
+
+        /// Output file for reply message (default: stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Output file for session state
+        #[arg(long)]
+        state_out: PathBuf,
+    },
+
+    /// Process reply and compute intersection (initiator)
+    OnlineComplete {
+        /// Reply message file (JSON)
+        #[arg(long)]
+        reply: PathBuf,
+
+        /// Session state file (from online-offer)
+        #[arg(long)]
+        state: PathBuf,
+
+        /// Output file for result (default: stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// Also generate reveal message for responder
+        #[arg(long)]
+        with_reveal: bool,
+
+        /// Output file for reveal message
+        #[arg(long)]
+        reveal_out: Option<PathBuf>,
+    },
+
+    /// Process reveal and compute intersection (responder)
+    OnlineReveal {
+        /// Reveal message file (JSON)
+        #[arg(long)]
+        reveal: PathBuf,
+
+        /// Session state file (from online-reply)
+        #[arg(long)]
+        state: PathBuf,
+
+        /// Output file for result (default: stdout)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
 }
 
 fn main() {
@@ -161,6 +305,82 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         } => cmd_receipt_verify(&receipt, expect_root_a.as_deref(), expect_root_b.as_deref())?,
 
         Commands::Card { input } => cmd_card(&input)?,
+
+        Commands::WireEncode {
+            input,
+            session,
+            role,
+            pad_to,
+            pad_secret,
+            output,
+            pretty,
+        } => cmd_wire_encode(
+            &input,
+            &session,
+            &role,
+            pad_to,
+            pad_secret.as_deref(),
+            output.as_deref(),
+            pretty,
+        )?,
+
+        Commands::WireDecode { input, summary } => cmd_wire_decode(&input, summary)?,
+
+        Commands::OnlineOffer {
+            input,
+            session,
+            mode,
+            pad_to,
+            pad_secret,
+            output,
+            state_out,
+        } => cmd_online_offer(
+            &input,
+            &session,
+            &mode,
+            pad_to,
+            pad_secret.as_deref(),
+            output.as_deref(),
+            &state_out,
+        )?,
+
+        Commands::OnlineReply {
+            input,
+            offer,
+            mode,
+            pad_to,
+            pad_secret,
+            output,
+            state_out,
+        } => cmd_online_reply(
+            &input,
+            &offer,
+            &mode,
+            pad_to,
+            pad_secret.as_deref(),
+            output.as_deref(),
+            &state_out,
+        )?,
+
+        Commands::OnlineComplete {
+            reply,
+            state,
+            output,
+            with_reveal,
+            reveal_out,
+        } => cmd_online_complete(
+            &reply,
+            &state,
+            output.as_deref(),
+            with_reveal,
+            reveal_out.as_deref(),
+        )?,
+
+        Commands::OnlineReveal {
+            reveal,
+            state,
+            output,
+        } => cmd_online_reveal(&reveal, &state, output.as_deref())?,
     }
 
     Ok(())
@@ -236,10 +456,10 @@ fn cmd_intersect(
     };
 
     match result {
-        blindoverlap::PsiResult::Cardinality { count } => {
+        PsiResult::Cardinality { count } => {
             writeln!(out, "cardinality: {count}")?;
         }
-        blindoverlap::PsiResult::Intersection { ids, root } => {
+        PsiResult::Intersection { ids, root } => {
             writeln!(out, "# intersection_root: {}", hex::encode(root))?;
             writeln!(out, "# set_root_a: {}", hex::encode(set_a.root()))?;
             writeln!(out, "# set_root_b: {}", hex::encode(set_b.root()))?;
@@ -276,7 +496,7 @@ fn cmd_receipt_sign(
 
     let psi_result = if intersection_mode == IntersectionMode::Cardinality {
         let count: usize = result.parse()?;
-        blindoverlap::PsiResult::Cardinality { count }
+        PsiResult::Cardinality { count }
     } else {
         let ids = if std::path::Path::new(result).exists() {
             load_fact_ids(std::path::Path::new(result))?
@@ -284,7 +504,7 @@ fn cmd_receipt_sign(
             vec![]
         };
         let set = FactSet::from_ids(ids.clone());
-        blindoverlap::PsiResult::Intersection {
+        PsiResult::Intersection {
             ids,
             root: *set.root(),
         }
@@ -367,6 +587,408 @@ fn cmd_card(input: &str) -> Result<(), Box<dyn std::error::Error>> {
     let set = FactSet::from_ids(ids);
     println!("count: {}", set.len());
     println!("set_root: {}", hex::encode(set.root()));
+
+    Ok(())
+}
+
+fn cmd_wire_encode(
+    input: &std::path::Path,
+    session: &str,
+    role: &str,
+    pad_to: Option<usize>,
+    pad_secret: Option<&str>,
+    output: Option<&std::path::Path>,
+    pretty: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let fact_set = load_fact_set(input)?;
+
+    let mode = IntersectionMode::Intersection;
+    let mut session_obj = InitiatorSession::new(session, fact_set, mode)?;
+    let offer = session_obj.generate_offer()?;
+
+    let masked = if role == "initiator" {
+        offer.masked_elements.clone()
+    } else {
+        return Err("wire-encode only supports initiator role (use online-reply for responder)".into());
+    };
+
+    let final_masked = if let Some(target) = pad_to {
+        let secret = if let Some(s) = pad_secret {
+            hex::decode(s)?
+        } else {
+            let config = PaddingConfig::with_random_secret(target);
+            config.padding_secret
+        };
+        let config = PaddingConfig::new(target, secret);
+        pad_masked_elements(&masked, &config, session.as_bytes())?
+    } else {
+        masked
+    };
+
+    let message = WireMessage::Offer(MaskedSetOffer::new(session, final_masked));
+
+    let json = if pretty {
+        wire_encode_pretty(&message)?
+    } else {
+        wire_encode(&message)?
+    };
+
+    match output {
+        Some(path) => fs::write(path, &json)?,
+        None => println!("{json}"),
+    }
+
+    eprintln!("session_id: {session}");
+    eprintln!("message_type: offer");
+    eprintln!("element_count: {}", offer.masked_elements.len());
+    if pad_to.is_some() {
+        eprintln!("padded_to: {}", pad_to.unwrap());
+    }
+
+    Ok(())
+}
+
+fn cmd_wire_decode(input: &std::path::Path, summary: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let json = fs::read_to_string(input)?;
+    let message = wire_decode(&json)?;
+
+    if summary {
+        match &message {
+            WireMessage::Offer(m) => {
+                println!("type: MaskedSetOffer");
+                println!("session_id: {}", m.session_id);
+                println!("version: {}", m.version);
+                println!("element_count: {}", m.masked_elements.len());
+            }
+            WireMessage::Reply(m) => {
+                println!("type: MaskedSetReply");
+                println!("session_id: {}", m.session_id);
+                println!("version: {}", m.version);
+                println!("responder_element_count: {}", m.responder_masked.len());
+                println!(
+                    "initiator_doubly_masked_count: {}",
+                    m.initiator_doubly_masked.len()
+                );
+            }
+            WireMessage::Reveal(m) => {
+                println!("type: IntersectionReveal");
+                println!("session_id: {}", m.session_id);
+                println!("version: {}", m.version);
+                println!(
+                    "responder_doubly_masked_count: {}",
+                    m.responder_doubly_masked.len()
+                );
+            }
+        }
+    } else {
+        let pretty = serde_json::to_string_pretty(&message)?;
+        println!("{pretty}");
+    }
+
+    Ok(())
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct InitiatorState {
+    session_id: String,
+    mode: String,
+    original_count: usize,
+    fact_ids_hex: Vec<String>,
+    secret_hex: String,
+    masked_elements_hex: Vec<String>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct ResponderState {
+    session_id: String,
+    mode: String,
+    original_count: usize,
+    fact_ids_hex: Vec<String>,
+    secret_hex: String,
+    masked_elements_hex: Vec<String>,
+    initiator_doubly_masked_hex: Vec<String>,
+}
+
+fn cmd_online_offer(
+    input: &std::path::Path,
+    session: &str,
+    mode: &str,
+    pad_to: Option<usize>,
+    pad_secret: Option<&str>,
+    output: Option<&std::path::Path>,
+    state_out: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let fact_set = load_fact_set(input)?;
+    let fact_ids = fact_set.ids();
+    let original_count = fact_ids.len();
+
+    let int_mode = match mode {
+        "intersection" => IntersectionMode::Intersection,
+        "cardinality" => IntersectionMode::Cardinality,
+        _ => return Err(format!("unknown mode: {mode}").into()),
+    };
+
+    let secret: [u8; 32] = rand::random();
+    let mut session_obj = InitiatorSession::with_secret(session, fact_set, int_mode, secret)?;
+    let offer = session_obj.generate_offer()?;
+
+    let final_masked = if let Some(target) = pad_to {
+        let secret_bytes = if let Some(s) = pad_secret {
+            hex::decode(s)?
+        } else {
+            let config = PaddingConfig::with_random_secret(target);
+            config.padding_secret
+        };
+        let config = PaddingConfig::new(target, secret_bytes);
+        pad_masked_elements(&offer.masked_elements, &config, session.as_bytes())?
+    } else {
+        offer.masked_elements.clone()
+    };
+
+    let message = WireMessage::Offer(MaskedSetOffer::new(session, final_masked));
+    let json = wire_encode_pretty(&message)?;
+
+    match output {
+        Some(path) => fs::write(path, &json)?,
+        None => println!("{json}"),
+    }
+
+    let state = InitiatorState {
+        session_id: session.to_string(),
+        mode: mode.to_string(),
+        original_count,
+        fact_ids_hex: fact_ids.iter().map(hex::encode).collect(),
+        secret_hex: hex::encode(secret),
+        masked_elements_hex: offer.masked_elements.iter().map(hex::encode).collect(),
+    };
+    fs::write(state_out, serde_json::to_string_pretty(&state)?)?;
+
+    eprintln!("session_id: {session}");
+    eprintln!("original_count: {original_count}");
+    eprintln!("state saved to: {}", state_out.display());
+
+    Ok(())
+}
+
+fn cmd_online_reply(
+    input: &std::path::Path,
+    offer_path: &std::path::Path,
+    mode: &str,
+    pad_to: Option<usize>,
+    pad_secret: Option<&str>,
+    output: Option<&std::path::Path>,
+    state_out: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let fact_set = load_fact_set(input)?;
+    let fact_ids = fact_set.ids();
+    let original_count = fact_ids.len();
+
+    let offer_json = fs::read_to_string(offer_path)?;
+    let offer_msg = wire_decode(&offer_json)?;
+    let offer = match offer_msg {
+        WireMessage::Offer(o) => o,
+        _ => return Err("expected offer message".into()),
+    };
+
+    let int_mode = match mode {
+        "intersection" => IntersectionMode::Intersection,
+        "cardinality" => IntersectionMode::Cardinality,
+        _ => return Err(format!("unknown mode: {mode}").into()),
+    };
+
+    let secret: [u8; 32] = rand::random();
+    let mut session_obj =
+        ResponderSession::with_secret(&offer.session_id, fact_set, int_mode, secret)?;
+    let reply = session_obj.process_offer_and_reply(&offer)?;
+
+    let final_responder_masked = if let Some(target) = pad_to {
+        let secret_bytes = if let Some(s) = pad_secret {
+            hex::decode(s)?
+        } else {
+            let config = PaddingConfig::with_random_secret(target);
+            config.padding_secret
+        };
+        let config = PaddingConfig::new(target, secret_bytes);
+        pad_masked_elements(&reply.responder_masked, &config, offer.session_id.as_bytes())?
+    } else {
+        reply.responder_masked.clone()
+    };
+
+    let message = WireMessage::Reply(MaskedSetReply::new(
+        &offer.session_id,
+        final_responder_masked,
+        reply.initiator_doubly_masked.clone(),
+    ));
+    let json = wire_encode_pretty(&message)?;
+
+    match output {
+        Some(path) => fs::write(path, &json)?,
+        None => println!("{json}"),
+    }
+
+    let state = ResponderState {
+        session_id: offer.session_id.clone(),
+        mode: mode.to_string(),
+        original_count,
+        fact_ids_hex: fact_ids.iter().map(hex::encode).collect(),
+        secret_hex: hex::encode(secret),
+        masked_elements_hex: reply.responder_masked.iter().map(hex::encode).collect(),
+        initiator_doubly_masked_hex: reply
+            .initiator_doubly_masked
+            .iter()
+            .map(hex::encode)
+            .collect(),
+    };
+    fs::write(state_out, serde_json::to_string_pretty(&state)?)?;
+
+    eprintln!("session_id: {}", offer.session_id);
+    eprintln!("original_count: {original_count}");
+    eprintln!("state saved to: {}", state_out.display());
+
+    Ok(())
+}
+
+fn cmd_online_complete(
+    reply_path: &std::path::Path,
+    state_path: &std::path::Path,
+    output: Option<&std::path::Path>,
+    with_reveal: bool,
+    reveal_out: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let state_json = fs::read_to_string(state_path)?;
+    let state: InitiatorState = serde_json::from_str(&state_json)?;
+
+    let reply_json = fs::read_to_string(reply_path)?;
+    let reply_msg = wire_decode(&reply_json)?;
+    let reply = match reply_msg {
+        WireMessage::Reply(r) => r,
+        _ => return Err("expected reply message".into()),
+    };
+
+    let int_mode = match state.mode.as_str() {
+        "intersection" => IntersectionMode::Intersection,
+        "cardinality" => IntersectionMode::Cardinality,
+        _ => return Err(format!("unknown mode: {}", state.mode).into()),
+    };
+
+    let fact_ids: Vec<[u8; 32]> = state
+        .fact_ids_hex
+        .iter()
+        .map(|s| {
+            hex::decode(s)
+                .map_err(|e| format!("hex decode error: {e}"))
+                .and_then(|b| {
+                    b.try_into()
+                        .map_err(|_| "expected 32 bytes".to_string())
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let fact_set = FactSet::from_ids(fact_ids);
+
+    let secret: [u8; 32] = hex::decode(&state.secret_hex)?
+        .try_into()
+        .map_err(|_| "secret must be 32 bytes")?;
+
+    let mut session_obj =
+        InitiatorSession::with_secret(&state.session_id, fact_set, int_mode, secret)?;
+    let _ = session_obj.generate_offer()?;
+    let result = session_obj.process_reply(&reply)?;
+
+    let mut out: Box<dyn Write> = match output {
+        Some(path) => Box::new(fs::File::create(path)?),
+        None => Box::new(io::stdout()),
+    };
+
+    match &result {
+        PsiResult::Cardinality { count } => {
+            writeln!(out, "cardinality: {count}")?;
+        }
+        PsiResult::Intersection { ids, root } => {
+            writeln!(out, "# intersection_root: {}", hex::encode(root))?;
+            writeln!(out, "# count: {}", ids.len())?;
+            for id in ids {
+                writeln!(out, "{}", hex::encode(id))?;
+            }
+        }
+    }
+
+    if with_reveal {
+        let reveal = session_obj.generate_reveal()?;
+        let reveal_msg = WireMessage::Reveal(reveal);
+        let reveal_json = wire_encode_pretty(&reveal_msg)?;
+
+        match reveal_out {
+            Some(path) => fs::write(path, &reveal_json)?,
+            None => eprintln!("\n--- Reveal Message ---\n{reveal_json}"),
+        }
+    }
+
+    Ok(())
+}
+
+fn cmd_online_reveal(
+    reveal_path: &std::path::Path,
+    state_path: &std::path::Path,
+    output: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let state_json = fs::read_to_string(state_path)?;
+    let state: ResponderState = serde_json::from_str(&state_json)?;
+
+    let reveal_json = fs::read_to_string(reveal_path)?;
+    let reveal_msg = wire_decode(&reveal_json)?;
+    let reveal = match reveal_msg {
+        WireMessage::Reveal(r) => r,
+        _ => return Err("expected reveal message".into()),
+    };
+
+    let int_mode = match state.mode.as_str() {
+        "intersection" => IntersectionMode::Intersection,
+        "cardinality" => IntersectionMode::Cardinality,
+        _ => return Err(format!("unknown mode: {}", state.mode).into()),
+    };
+
+    let fact_ids: Vec<[u8; 32]> = state
+        .fact_ids_hex
+        .iter()
+        .map(|s| {
+            hex::decode(s)
+                .map_err(|e| format!("hex decode error: {e}"))
+                .and_then(|b| {
+                    b.try_into()
+                        .map_err(|_| "expected 32 bytes".to_string())
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let fact_set = FactSet::from_ids(fact_ids);
+
+    let secret: [u8; 32] = hex::decode(&state.secret_hex)?
+        .try_into()
+        .map_err(|_| "secret must be 32 bytes")?;
+
+    let offer = MaskedSetOffer::new(&state.session_id, vec![[0u8; 32]; state.initiator_doubly_masked_hex.len()]);
+    let mut session_obj =
+        ResponderSession::with_secret(&state.session_id, fact_set, int_mode, secret)?;
+
+    let _ = session_obj.process_offer_and_reply(&offer);
+    let result = session_obj.process_reveal(&reveal)?;
+
+    let mut out: Box<dyn Write> = match output {
+        Some(path) => Box::new(fs::File::create(path)?),
+        None => Box::new(io::stdout()),
+    };
+
+    match &result {
+        PsiResult::Cardinality { count } => {
+            writeln!(out, "cardinality: {count}")?;
+        }
+        PsiResult::Intersection { ids, root } => {
+            writeln!(out, "# intersection_root: {}", hex::encode(root))?;
+            writeln!(out, "# count: {}", ids.len())?;
+            for id in ids {
+                writeln!(out, "{}", hex::encode(id))?;
+            }
+        }
+    }
 
     Ok(())
 }
