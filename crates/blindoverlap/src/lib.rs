@@ -8,6 +8,7 @@
 pub mod fact_id;
 pub mod protocol;
 pub mod receipt;
+pub mod session;
 pub mod wire;
 
 pub use fact_id::{
@@ -17,6 +18,9 @@ pub use protocol::{
     IntersectionMode, MaskedElement, PsiError, PsiParty, PsiProtocol, PsiResult, MAX_SET_SIZE,
 };
 pub use receipt::{IntersectionReceipt, ReceiptError, ReceiptMode, ReceiptSigner, ReceiptVerifier};
+pub use session::{
+    InitiatorSession, InitiatorState, ResponderSession, ResponderState, SessionError,
+};
 pub use wire::{
     decode as wire_decode, encode as wire_encode, encode_pretty as wire_encode_pretty,
     IntersectionReveal, MaskedSetOffer, MaskedSetReply, WireError, WireMessage,
