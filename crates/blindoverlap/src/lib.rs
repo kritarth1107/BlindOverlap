@@ -6,6 +6,7 @@
 #![deny(unsafe_code)]
 
 pub mod fact_id;
+pub mod padding;
 pub mod protocol;
 pub mod receipt;
 pub mod session;
@@ -13,6 +14,10 @@ pub mod wire;
 
 pub use fact_id::{
     canonical_json, fact_id_from_json, fact_id_from_str, FactId, FactIdError, FactSet,
+};
+pub use padding::{
+    generate_dummy_fact_ids, generate_dummy_masked_elements, next_power_of_two, pad_fact_ids,
+    pad_masked_elements, strip_padding, PaddingConfig, PaddingError,
 };
 pub use protocol::{
     IntersectionMode, MaskedElement, PsiError, PsiParty, PsiProtocol, PsiResult, MAX_SET_SIZE,
