@@ -643,8 +643,8 @@ fn cmd_wire_encode(
     eprintln!("session_id: {session}");
     eprintln!("message_type: offer");
     eprintln!("element_count: {}", offer.masked_elements.len());
-    if pad_to.is_some() {
-        eprintln!("padded_to: {}", pad_to.unwrap());
+    if let Some(target) = pad_to {
+        eprintln!("padded_to: {target}");
     }
 
     Ok(())
