@@ -78,8 +78,8 @@ pub fn generate_dummy_fact_ids(
     session_context: &[u8],
     count: usize,
 ) -> Vec<FactId> {
-    let mut mac = HmacSha256::new_from_slice(padding_secret)
-        .expect("HMAC can take key of any size");
+    let mut mac =
+        HmacSha256::new_from_slice(padding_secret).expect("HMAC can take key of any size");
 
     mac.update(PADDING_DOMAIN);
     mac.update(b":dummy_ids:");
@@ -105,8 +105,8 @@ pub fn generate_dummy_masked_elements(
     session_context: &[u8],
     count: usize,
 ) -> Vec<MaskedElement> {
-    let mut mac = HmacSha256::new_from_slice(padding_secret)
-        .expect("HMAC can take key of any size");
+    let mut mac =
+        HmacSha256::new_from_slice(padding_secret).expect("HMAC can take key of any size");
 
     mac.update(PADDING_DOMAIN);
     mac.update(b":masked_elements:");

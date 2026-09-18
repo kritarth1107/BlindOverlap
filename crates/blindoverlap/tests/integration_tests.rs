@@ -2,9 +2,9 @@
 
 use blindoverlap::{
     canonical_json, fact_id_from_json, fact_id_from_str, pad_masked_elements, wire_decode,
-    wire_encode, FactSet, InitiatorSession, IntersectionMode, IntersectionReceipt,
-    MaskedSetOffer, MaskedSetReply, PaddingConfig, PsiProtocol, PsiResult, ReceiptSigner,
-    ReceiptVerifier, ResponderSession, WireMessage,
+    wire_encode, FactSet, InitiatorSession, IntersectionMode, IntersectionReceipt, MaskedSetOffer,
+    MaskedSetReply, PaddingConfig, PsiProtocol, PsiResult, ReceiptSigner, ReceiptVerifier,
+    ResponderSession, WireMessage,
 };
 use serde_json::json;
 
@@ -453,7 +453,10 @@ fn test_wire_roundtrip_with_session_data() {
     match decoded {
         WireMessage::Offer(decoded_offer) => {
             assert_eq!(decoded_offer.session_id, offer.session_id);
-            assert_eq!(decoded_offer.masked_elements.len(), offer.masked_elements.len());
+            assert_eq!(
+                decoded_offer.masked_elements.len(),
+                offer.masked_elements.len()
+            );
             assert_eq!(decoded_offer.masked_elements, offer.masked_elements);
         }
         _ => panic!("expected offer message"),
@@ -494,12 +497,18 @@ fn test_online_session_correctness_vs_colocated() {
         .intersect(&set_a, &set_b, IntersectionMode::Intersection)
         .unwrap();
 
-    let mut initiator =
-        InitiatorSession::new("correctness-test", set_a.clone(), IntersectionMode::Intersection)
-            .unwrap();
-    let mut responder =
-        ResponderSession::new("correctness-test", set_b.clone(), IntersectionMode::Intersection)
-            .unwrap();
+    let mut initiator = InitiatorSession::new(
+        "correctness-test",
+        set_a.clone(),
+        IntersectionMode::Intersection,
+    )
+    .unwrap();
+    let mut responder = ResponderSession::new(
+        "correctness-test",
+        set_b.clone(),
+        IntersectionMode::Intersection,
+    )
+    .unwrap();
 
     let offer = initiator.generate_offer().unwrap();
     let reply = responder.process_offer_and_reply(&offer).unwrap();
@@ -565,11 +574,7 @@ fn test_padding_length_invariance() {
             .collect();
 
         let padded = pad_masked_elements(&elements, &config, b"ctx").unwrap();
-        assert_eq!(
-            padded.len(),
-            100,
-            "size {real_size} should pad to 100"
-        );
+        assert_eq!(padded.len(), 100, "size {real_size} should pad to 100");
     }
 }
 

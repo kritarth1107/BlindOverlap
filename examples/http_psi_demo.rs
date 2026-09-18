@@ -136,8 +136,11 @@ async fn handle_client(
     println!("Received offer (session: {})", offer.session_id);
     println!("  Initiator elements: {}", offer.masked_elements.len());
 
-    let mut session =
-        ResponderSession::new(&offer.session_id, server_facts, IntersectionMode::Intersection)?;
+    let mut session = ResponderSession::new(
+        &offer.session_id,
+        server_facts,
+        IntersectionMode::Intersection,
+    )?;
 
     let reply = session.process_offer_and_reply(&offer)?;
     println!(

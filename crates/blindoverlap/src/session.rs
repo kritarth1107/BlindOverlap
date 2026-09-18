@@ -255,10 +255,13 @@ impl InitiatorSession {
             });
         }
 
-        let responder_masked = self.responder_masked.as_ref().ok_or(SessionError::InvalidState {
-            expected: "Complete with responder data",
-            actual: "missing responder masked elements",
-        })?;
+        let responder_masked =
+            self.responder_masked
+                .as_ref()
+                .ok_or(SessionError::InvalidState {
+                    expected: "Complete with responder data",
+                    actual: "missing responder masked elements",
+                })?;
 
         let doubly_masked: Vec<MaskedElement> = responder_masked
             .iter()
@@ -409,7 +412,10 @@ impl ResponderSession {
     /// Process the reveal message and compute the intersection.
     ///
     /// Must be called in ReplySent state.
-    pub fn process_reveal(&mut self, reveal: &IntersectionReveal) -> Result<PsiResult, SessionError> {
+    pub fn process_reveal(
+        &mut self,
+        reveal: &IntersectionReveal,
+    ) -> Result<PsiResult, SessionError> {
         if self.state != ResponderState::ReplySent {
             return Err(SessionError::InvalidState {
                 expected: "ReplySent",
@@ -432,12 +438,13 @@ impl ResponderSession {
             });
         }
 
-        let initiator_doubly_masked = self.initiator_doubly_masked.as_ref().ok_or(
-            SessionError::InvalidState {
-                expected: "ReplySent with initiator data",
-                actual: "missing initiator doubly masked",
-            },
-        )?;
+        let initiator_doubly_masked =
+            self.initiator_doubly_masked
+                .as_ref()
+                .ok_or(SessionError::InvalidState {
+                    expected: "ReplySent with initiator data",
+                    actual: "missing initiator doubly masked",
+                })?;
 
         let result = compute_intersection(
             &reveal.responder_doubly_masked,
@@ -517,12 +524,18 @@ mod tests {
         let set_a = make_set(&[json!({"x": 1}), json!({"x": 2}), json!({"x": 3})]);
         let set_b = make_set(&[json!({"x": 2}), json!({"x": 3}), json!({"x": 4})]);
 
-        let mut initiator =
-            InitiatorSession::new("test-session", set_a.clone(), IntersectionMode::Intersection)
-                .unwrap();
-        let mut responder =
-            ResponderSession::new("test-session", set_b.clone(), IntersectionMode::Intersection)
-                .unwrap();
+        let mut initiator = InitiatorSession::new(
+            "test-session",
+            set_a.clone(),
+            IntersectionMode::Intersection,
+        )
+        .unwrap();
+        let mut responder = ResponderSession::new(
+            "test-session",
+            set_b.clone(),
+            IntersectionMode::Intersection,
+        )
+        .unwrap();
 
         let offer = initiator.generate_offer().unwrap();
         assert_eq!(initiator.state(), InitiatorState::AwaitingReply);
@@ -584,9 +597,11 @@ mod tests {
             .unwrap();
 
         let mut initiator =
-            InitiatorSession::new("compare", set_a.clone(), IntersectionMode::Intersection).unwrap();
+            InitiatorSession::new("compare", set_a.clone(), IntersectionMode::Intersection)
+                .unwrap();
         let mut responder =
-            ResponderSession::new("compare", set_b.clone(), IntersectionMode::Intersection).unwrap();
+            ResponderSession::new("compare", set_b.clone(), IntersectionMode::Intersection)
+                .unwrap();
 
         let offer = initiator.generate_offer().unwrap();
         let reply = responder.process_offer_and_reply(&offer).unwrap();
