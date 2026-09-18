@@ -10,7 +10,10 @@ BlindOverlap is an agent-native private set intersection (PSI) library for conte
 - **Private set intersection**: DH-based PSI protocol using X25519 elliptic curve cryptography
 - **Intersection modes**: Full intersection (reveal matching IDs) or cardinality-only (reveal only count)
 - **Signed receipts**: Ed25519 signatures over intersection results for auditability
-- **CLI tool**: Encode facts, run intersections, sign and verify receipts
+- **Wire protocol**: JSON-serializable messages for network-based PSI exchanges (v0.2.0)
+- **Online sessions**: State machine API for two-party PSI over wire messages (v0.2.0)
+- **Set-size padding**: Hide real set cardinality from wire message length analysis (v0.2.0)
+- **CLI tool**: Encode facts, run intersections, wire encode/decode, online sessions
 
 ## Honest Scope & Limitations
 
@@ -19,11 +22,12 @@ BlindOverlap is an agent-native private set intersection (PSI) library for conte
 | Security model | **Semi-honest only** — assumes parties follow protocol |
 | Malicious security | ❌ NOT supported (no VOLE-PSI) |
 | Fuzzy/embedding PSI | ❌ NOT supported (exact match only) |
-| Cardinality mode | ⚠️ Leaks intersection size |\\|
+| Cardinality mode | ⚠️ Leaks intersection size |
+| Padding | ⚠️ Best-effort size hiding (semi-honest only) |
 | Scale | **Toy scale**: ≤4,096 IDs per set, 32 bytes each |
 | Production readiness | ❌ **NOT production ready** — for experimentation only |
 
-> **Warning**: This is a v0.1.0 release intended for experimentation and learning. Do not use in production systems where security is critical. See [THREAT_MODEL.md](THREAT_MODEL.md) for details.
+> **Warning**: This is a v0.2.0 release intended for experimentation and learning. Do not use in production systems where security is critical. See [THREAT_MODEL.md](THREAT_MODEL.md) for details.
 
 ## Quick Start
 
@@ -48,7 +52,7 @@ echo '{"name": "Alice", "age": 30}' | blindoverlap encode
 echo -e '{"fact": 1}\n{"fact": 2}' | blindoverlap encode --with-root
 ```
 
-### Run PSI Intersection
+### Run PSI Intersection (Colocated)
 
 ```bash
 # Create two fact files
@@ -61,6 +65,47 @@ blindoverlap intersect --set-a set_a.ids --set-b set_b.ids
 
 # Cardinality only (just the count)
 blindoverlap intersect --set-a set_a.ids --set-b set_b.ids --cardinality
+```
+
+### Online PSI (Network-capable)
+
+```bash
+# Party A (initiator): Generate offer
+blindoverlap online-offer \
+  --input set_a.ids \
+  --session "my-session" \
+  --state-out a_state.json \
+  --output offer.json
+
+# Party B (responder): Process offer, generate reply
+blindoverlap online-reply \
+  --input set_b.ids \
+  --offer offer.json \
+  --state-out b_state.json \
+  --output reply.json
+
+# Party A: Process reply, compute intersection
+blindoverlap online-complete \
+  --reply reply.json \
+  --state a_state.json \
+  --with-reveal \
+  --reveal-out reveal.json
+
+# Party B: Process reveal for bilateral intersection
+blindoverlap online-reveal \
+  --reveal reveal.json \
+  --state b_state.json
+```
+
+### Padding (Hide Set Size)
+
+```bash
+# Pad to 64 elements to hide real set size
+blindoverlap online-offer \
+  --input set_a.ids \
+  --session "padded-session" \
+  --pad-to 64 \
+  --state-out a_state.json
 ```
 
 ### Sign & Verify Receipts
@@ -85,31 +130,37 @@ blindoverlap receipt-verify --receipt receipt.json
 ## Library Usage
 
 ```rust
-use blindoverlap::{FactSet, PsiProtocol, IntersectionMode, fact_id_from_json};
+use blindoverlap::{
+    FactSet, PsiProtocol, IntersectionMode, fact_id_from_json,
+    InitiatorSession, ResponderSession, WireMessage, wire_encode, wire_decode,
+};
 use serde_json::json;
 
-// Create fact sets
+// Colocated intersection (both sets on same machine)
 let set_a = FactSet::from_ids([
     fact_id_from_json(&json!({"shared": true})),
     fact_id_from_json(&json!({"only_a": true})),
 ]);
-
 let set_b = FactSet::from_ids([
     fact_id_from_json(&json!({"shared": true})),
     fact_id_from_json(&json!({"only_b": true})),
 ]);
 
-// Run PSI
 let protocol = PsiProtocol::new();
 let result = protocol.intersect(&set_a, &set_b, IntersectionMode::Intersection)?;
 
-match result {
-    blindoverlap::PsiResult::Intersection { ids, root } => {
-        println!("Found {} matching facts", ids.len());
-        println!("Intersection root: {}", hex::encode(root));
-    }
-    _ => {}
-}
+// Online intersection (network-capable)
+let mut initiator = InitiatorSession::new("session-1", set_a, IntersectionMode::Intersection)?;
+let mut responder = ResponderSession::new("session-1", set_b, IntersectionMode::Intersection)?;
+
+// Generate and exchange wire messages
+let offer = initiator.generate_offer()?;
+let reply = responder.process_offer_and_reply(&offer)?;
+let result = initiator.process_reply(&reply)?;
+
+// Optional: bilateral intersection
+let reveal = initiator.generate_reveal()?;
+let responder_result = responder.process_reveal(&reveal)?;
 ```
 
 ## Modules
@@ -119,6 +170,9 @@ match result {
 | `fact_id` | RFC 8785 canonical JSON hashing, FactSet with merkle root |
 | `protocol` | DH-PSI implementation using X25519 |
 | `receipt` | Ed25519 signed intersection receipts |
+| `wire` | JSON wire protocol for network exchanges (v0.2.0) |
+| `session` | Online two-party PSI state machine (v0.2.0) |
+| `padding` | Set-size padding with domain-separated PRF (v0.2.0) |
 
 ## CLI Commands
 
@@ -126,10 +180,16 @@ match result {
 |---------|-------------|
 | `encode` | Convert JSON facts to fact IDs |
 | `canonicalize` | Show RFC 8785 canonical JSON form |
-| `intersect` | Run PSI between two fact sets |
+| `intersect` | Run PSI between two fact sets (colocated) |
 | `receipt-sign` | Create signed intersection receipt |
 | `receipt-verify` | Verify receipt signature and roots |
 | `card` | Output set cardinality and root |
+| `wire-encode` | Encode wire protocol message |
+| `wire-decode` | Decode and display wire message |
+| `online-offer` | Generate initiator offer (v0.2.0) |
+| `online-reply` | Process offer, generate reply (v0.2.0) |
+| `online-complete` | Process reply, compute intersection (v0.2.0) |
+| `online-reveal` | Process reveal for bilateral mode (v0.2.0) |
 
 ## Protocol Overview
 
@@ -138,9 +198,31 @@ BlindOverlap uses a Diffie-Hellman based PSI protocol:
 1. **Fact Encoding**: Each JSON fact is canonicalized per RFC 8785 and hashed with SHA-256 to produce a 32-byte fact ID
 2. **Set Commitment**: Each set is committed via a merkle-style root over sorted fact IDs
 3. **Masking**: Each party masks their fact IDs with their secret scalar
-4. **Exchange**: Parties exchange masked sets
+4. **Exchange**: Parties exchange masked sets (via wire protocol for network use)
 5. **Double-Masking**: Each party applies their secret to the other's masked set
 6. **Comparison**: Matching doubly-masked values indicate common facts
+
+### Wire Protocol (v0.2.0)
+
+For network-based PSI, the protocol uses three message types:
+- `MaskedSetOffer`: Initiator sends masked elements
+- `MaskedSetReply`: Responder sends their masked elements + doubly-masked initiator elements
+- `IntersectionReveal`: Optional message for bilateral intersection
+
+## Examples
+
+See the `examples/` directory:
+- `basic_psi.rs` — Colocated PSI demonstration
+- `http_psi_demo.rs` — TCP-based two-party PSI demo (server/client)
+
+Run the HTTP demo:
+```bash
+# Terminal 1: Start server
+cargo run --example http_psi_demo -- server
+
+# Terminal 2: Run client
+cargo run --example http_psi_demo -- client
+```
 
 ## License
 
