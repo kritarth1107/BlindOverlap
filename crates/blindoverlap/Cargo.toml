@@ -13,6 +13,7 @@ categories = ["cryptography"]
 serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
+hmac = { workspace = true }
 x25519-dalek = { workspace = true, features = ["static_secrets"] }
 ed25519-dalek = { workspace = true, features = ["rand_core"] }
 rand = { workspace = true }
