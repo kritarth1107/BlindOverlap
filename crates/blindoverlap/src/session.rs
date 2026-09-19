@@ -11,11 +11,19 @@
 //! 4. **Initiator** optionally calls `generate_reveal()` → sends `IntersectionReveal`
 //! 5. **Responder** processes reveal, can compute intersection
 //!
+//! # Protocol Versions
+//!
+//! - **v1 sessions**: No freshness enforcement (backward compatible)
+//! - **v2 sessions**: TTL and nonce validation for replay protection
+//!
 //! # Security Note
 //!
-//! This is semi-honest secure only. See THREAT_MODEL.md.
+//! This is semi-honest secure only. TTL and nonce validation are best-effort
+//! aids against accidental replay, not protection against active adversaries.
+//! See THREAT_MODEL.md.
 
 use crate::fact_id::{FactId, FactSet};
+use crate::freshness::{FreshnessError, SessionDeadline, SessionNonce, DEFAULT_TTL_SECS};
 use crate::protocol::{IntersectionMode, MaskedElement, PsiResult, MAX_SET_SIZE};
 use crate::wire::{IntersectionReveal, MaskedSetOffer, MaskedSetReply};
 use std::collections::BTreeSet;
@@ -52,6 +60,25 @@ pub enum SessionError {
         /// Actual count.
         got: usize,
     },
+    /// Freshness validation error.
+    #[error("freshness error: {0}")]
+    Freshness(#[from] FreshnessError),
+    /// Nonce mismatch in received message.
+    #[error("nonce mismatch: expected {expected}, got {got}")]
+    NonceMismatch {
+        /// Expected nonce (hex).
+        expected: String,
+        /// Received nonce (hex).
+        got: String,
+    },
+    /// Protocol version mismatch.
+    #[error("protocol version mismatch: session is v{session_version}, message is v{message_version}")]
+    VersionMismatch {
+        /// Session protocol version.
+        session_version: u8,
+        /// Message protocol version.
+        message_version: u8,
+    },
 }
 
 /// Session state for the initiator (party A).
@@ -82,6 +109,42 @@ fn hash_to_public_key(id: &FactId) -> PublicKey {
     PublicKey::from(&secret)
 }
 
+/// Configuration for session freshness.
+#[derive(Debug, Clone)]
+pub struct SessionConfig {
+    /// TTL in seconds (default: 300).
+    pub ttl_secs: u64,
+    /// Whether to use v2 protocol with freshness fields.
+    pub use_freshness: bool,
+}
+
+impl Default for SessionConfig {
+    fn default() -> Self {
+        Self {
+            ttl_secs: DEFAULT_TTL_SECS,
+            use_freshness: true,
+        }
+    }
+}
+
+impl SessionConfig {
+    /// Create a v1-compatible session (no freshness enforcement).
+    pub fn v1_compatible() -> Self {
+        Self {
+            ttl_secs: DEFAULT_TTL_SECS,
+            use_freshness: false,
+        }
+    }
+
+    /// Create a session with custom TTL.
+    pub fn with_ttl(ttl_secs: u64) -> Self {
+        Self {
+            ttl_secs,
+            use_freshness: true,
+        }
+    }
+}
+
 /// PSI session for the initiator (party who starts the exchange).
 pub struct InitiatorSession {
     session_id: String,
@@ -90,17 +153,31 @@ pub struct InitiatorSession {
     original_ids: Vec<FactId>,
     mode: IntersectionMode,
     state: InitiatorState,
+    config: SessionConfig,
+    nonce: SessionNonce,
+    deadline: SessionDeadline,
     masked_elements: Option<Vec<MaskedElement>>,
     responder_masked: Option<Vec<MaskedElement>>,
+    responder_nonce: Option<SessionNonce>,
     our_doubly_masked: Option<Vec<MaskedElement>>,
 }
 
 impl InitiatorSession {
-    /// Create a new initiator session.
+    /// Create a new initiator session with default configuration.
     pub fn new(
         session_id: impl Into<String>,
         fact_set: FactSet,
         mode: IntersectionMode,
+    ) -> Result<Self, SessionError> {
+        Self::with_config(session_id, fact_set, mode, SessionConfig::default())
+    }
+
+    /// Create a new initiator session with custom configuration.
+    pub fn with_config(
+        session_id: impl Into<String>,
+        fact_set: FactSet,
+        mode: IntersectionMode,
+        config: SessionConfig,
     ) -> Result<Self, SessionError> {
         if fact_set.len() > MAX_SET_SIZE {
             return Err(SessionError::SetTooLarge(fact_set.len()));
@@ -108,6 +185,8 @@ impl InitiatorSession {
 
         let secret = StaticSecret::random_from_rng(rand::thread_rng());
         let original_ids = fact_set.ids();
+        let nonce = SessionNonce::generate();
+        let deadline = SessionDeadline::new(config.ttl_secs);
 
         Ok(Self {
             session_id: session_id.into(),
@@ -116,8 +195,12 @@ impl InitiatorSession {
             original_ids,
             mode,
             state: InitiatorState::Created,
+            config,
+            nonce,
+            deadline,
             masked_elements: None,
             responder_masked: None,
+            responder_nonce: None,
             our_doubly_masked: None,
         })
     }
@@ -135,6 +218,9 @@ impl InitiatorSession {
 
         let secret = StaticSecret::from(secret);
         let original_ids = fact_set.ids();
+        let nonce = SessionNonce::generate();
+        let config = SessionConfig::v1_compatible();
+        let deadline = SessionDeadline::new(config.ttl_secs);
 
         Ok(Self {
             session_id: session_id.into(),
@@ -143,8 +229,12 @@ impl InitiatorSession {
             original_ids,
             mode,
             state: InitiatorState::Created,
+            config,
+            nonce,
+            deadline,
             masked_elements: None,
             responder_masked: None,
+            responder_nonce: None,
             our_doubly_masked: None,
         })
     }
@@ -167,6 +257,26 @@ impl InitiatorSession {
     /// Get the intersection mode.
     pub fn mode(&self) -> IntersectionMode {
         self.mode
+    }
+
+    /// Get the initiator's nonce.
+    pub fn nonce(&self) -> &SessionNonce {
+        &self.nonce
+    }
+
+    /// Get the session deadline.
+    pub fn deadline(&self) -> &SessionDeadline {
+        &self.deadline
+    }
+
+    /// Get the responder's nonce (available after processing reply).
+    pub fn responder_nonce(&self) -> Option<&SessionNonce> {
+        self.responder_nonce.as_ref()
+    }
+
+    /// Check if this session uses freshness (v2 protocol).
+    pub fn uses_freshness(&self) -> bool {
+        self.config.use_freshness
     }
 
     /// Generate the initial offer message.
@@ -192,12 +302,22 @@ impl InitiatorSession {
         self.masked_elements = Some(masked.clone());
         self.state = InitiatorState::AwaitingReply;
 
-        Ok(MaskedSetOffer::new(&self.session_id, masked))
+        if self.config.use_freshness {
+            Ok(MaskedSetOffer::new_v2(
+                &self.session_id,
+                masked,
+                self.nonce,
+                self.deadline,
+            ))
+        } else {
+            Ok(MaskedSetOffer::new(&self.session_id, masked))
+        }
     }
 
     /// Process the reply message and compute the intersection.
     ///
     /// Must be called in AwaitingReply state.
+    /// For v2 sessions, validates freshness fields and rejects expired messages.
     pub fn process_reply(&mut self, reply: &MaskedSetReply) -> Result<PsiResult, SessionError> {
         if self.state != InitiatorState::AwaitingReply {
             return Err(SessionError::InvalidState {
@@ -211,6 +331,21 @@ impl InitiatorSession {
                 expected: self.session_id.clone(),
                 got: reply.session_id.clone(),
             });
+        }
+
+        if self.config.use_freshness && reply.has_freshness() {
+            if let Some(initiator_nonce) = &reply.initiator_nonce {
+                if initiator_nonce != &self.nonce {
+                    return Err(SessionError::NonceMismatch {
+                        expected: self.nonce.to_hex(),
+                        got: initiator_nonce.to_hex(),
+                    });
+                }
+            }
+            if let Some(deadline) = reply.deadline() {
+                deadline.validate()?;
+            }
+            self.responder_nonce = reply.responder_nonce;
         }
 
         let our_count = self.masked_elements.as_ref().map(|m| m.len()).unwrap_or(0);
@@ -271,7 +406,18 @@ impl InitiatorSession {
             })
             .collect();
 
-        Ok(IntersectionReveal::new(&self.session_id, doubly_masked))
+        if self.config.use_freshness {
+            let responder_nonce = self.responder_nonce.unwrap_or_else(SessionNonce::generate);
+            Ok(IntersectionReveal::new_v2(
+                &self.session_id,
+                doubly_masked,
+                self.nonce,
+                responder_nonce,
+                SessionDeadline::new(self.config.ttl_secs),
+            ))
+        } else {
+            Ok(IntersectionReveal::new(&self.session_id, doubly_masked))
+        }
     }
 }
 
@@ -283,16 +429,29 @@ pub struct ResponderSession {
     original_ids: Vec<FactId>,
     mode: IntersectionMode,
     state: ResponderState,
+    config: SessionConfig,
+    nonce: SessionNonce,
+    initiator_nonce: Option<SessionNonce>,
     masked_elements: Option<Vec<MaskedElement>>,
     initiator_doubly_masked: Option<Vec<MaskedElement>>,
 }
 
 impl ResponderSession {
-    /// Create a new responder session.
+    /// Create a new responder session with default configuration.
     pub fn new(
         session_id: impl Into<String>,
         fact_set: FactSet,
         mode: IntersectionMode,
+    ) -> Result<Self, SessionError> {
+        Self::with_config(session_id, fact_set, mode, SessionConfig::default())
+    }
+
+    /// Create a new responder session with custom configuration.
+    pub fn with_config(
+        session_id: impl Into<String>,
+        fact_set: FactSet,
+        mode: IntersectionMode,
+        config: SessionConfig,
     ) -> Result<Self, SessionError> {
         if fact_set.len() > MAX_SET_SIZE {
             return Err(SessionError::SetTooLarge(fact_set.len()));
@@ -300,6 +459,7 @@ impl ResponderSession {
 
         let secret = StaticSecret::random_from_rng(rand::thread_rng());
         let original_ids = fact_set.ids();
+        let nonce = SessionNonce::generate();
 
         Ok(Self {
             session_id: session_id.into(),
@@ -308,6 +468,9 @@ impl ResponderSession {
             original_ids,
             mode,
             state: ResponderState::Created,
+            config,
+            nonce,
+            initiator_nonce: None,
             masked_elements: None,
             initiator_doubly_masked: None,
         })
@@ -326,6 +489,8 @@ impl ResponderSession {
 
         let secret = StaticSecret::from(secret);
         let original_ids = fact_set.ids();
+        let nonce = SessionNonce::generate();
+        let config = SessionConfig::v1_compatible();
 
         Ok(Self {
             session_id: session_id.into(),
@@ -334,6 +499,9 @@ impl ResponderSession {
             original_ids,
             mode,
             state: ResponderState::Created,
+            config,
+            nonce,
+            initiator_nonce: None,
             masked_elements: None,
             initiator_doubly_masked: None,
         })
@@ -359,9 +527,25 @@ impl ResponderSession {
         self.mode
     }
 
+    /// Get the responder's nonce.
+    pub fn nonce(&self) -> &SessionNonce {
+        &self.nonce
+    }
+
+    /// Get the initiator's nonce (available after processing offer).
+    pub fn initiator_nonce(&self) -> Option<&SessionNonce> {
+        self.initiator_nonce.as_ref()
+    }
+
+    /// Check if this session uses freshness (v2 protocol).
+    pub fn uses_freshness(&self) -> bool {
+        self.config.use_freshness
+    }
+
     /// Process the offer message and generate the reply.
     ///
     /// Must be called in Created state.
+    /// For v2 sessions, validates freshness fields and rejects expired messages.
     pub fn process_offer_and_reply(
         &mut self,
         offer: &MaskedSetOffer,
@@ -378,6 +562,15 @@ impl ResponderSession {
                 expected: self.session_id.clone(),
                 got: offer.session_id.clone(),
             });
+        }
+
+        let use_v2 = self.config.use_freshness && offer.has_freshness();
+
+        if use_v2 {
+            if let Some(deadline) = offer.deadline() {
+                deadline.validate()?;
+            }
+            self.initiator_nonce = offer.nonce;
         }
 
         let our_masked: Vec<MaskedElement> = self
@@ -402,16 +595,29 @@ impl ResponderSession {
         self.initiator_doubly_masked = Some(initiator_doubly_masked.clone());
         self.state = ResponderState::ReplySent;
 
-        Ok(MaskedSetReply::new(
-            &self.session_id,
-            our_masked,
-            initiator_doubly_masked,
-        ))
+        if use_v2 {
+            let initiator_nonce = offer.nonce.unwrap_or_else(SessionNonce::generate);
+            Ok(MaskedSetReply::new_v2(
+                &self.session_id,
+                our_masked,
+                initiator_doubly_masked,
+                initiator_nonce,
+                self.nonce,
+                SessionDeadline::new(self.config.ttl_secs),
+            ))
+        } else {
+            Ok(MaskedSetReply::new(
+                &self.session_id,
+                our_masked,
+                initiator_doubly_masked,
+            ))
+        }
     }
 
     /// Process the reveal message and compute the intersection.
     ///
     /// Must be called in ReplySent state.
+    /// For v2 sessions, validates freshness fields.
     pub fn process_reveal(
         &mut self,
         reveal: &IntersectionReveal,
@@ -428,6 +634,20 @@ impl ResponderSession {
                 expected: self.session_id.clone(),
                 got: reveal.session_id.clone(),
             });
+        }
+
+        if self.config.use_freshness && reveal.has_freshness() {
+            if let Some(responder_nonce) = &reveal.responder_nonce {
+                if responder_nonce != &self.nonce {
+                    return Err(SessionError::NonceMismatch {
+                        expected: self.nonce.to_hex(),
+                        got: responder_nonce.to_hex(),
+                    });
+                }
+            }
+            if let Some(deadline) = reveal.deadline() {
+                deadline.validate()?;
+            }
         }
 
         let our_count = self.masked_elements.as_ref().map(|m| m.len()).unwrap_or(0);

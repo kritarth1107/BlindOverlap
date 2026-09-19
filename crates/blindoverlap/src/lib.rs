@@ -25,7 +25,7 @@ pub use protocol::{
 };
 pub use receipt::{IntersectionReceipt, ReceiptError, ReceiptMode, ReceiptSigner, ReceiptVerifier};
 pub use session::{
-    InitiatorSession, InitiatorState, ResponderSession, ResponderState, SessionError,
+    InitiatorSession, InitiatorState, ResponderSession, ResponderState, SessionConfig, SessionError,
 };
 pub use wire::{
     decode as wire_decode, encode as wire_encode, encode_pretty as wire_encode_pretty,
