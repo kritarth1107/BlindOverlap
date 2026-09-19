@@ -661,3 +661,377 @@ fn test_wire_with_padding_roundtrip() {
         _ => panic!("expected offer"),
     }
 }
+
+// === Freshness Tests (v0.3.0) ===
+
+use blindoverlap::{
+    FreshnessError, ReplayStore, SessionConfig, SessionDeadline, SessionNonce, TranscriptDigest,
+    WireBoundReceipt,
+};
+
+#[test]
+fn test_session_nonce_uniqueness() {
+    let nonce1 = SessionNonce::generate();
+    let nonce2 = SessionNonce::generate();
+
+    assert_ne!(nonce1, nonce2);
+    assert_ne!(nonce1.to_hex(), nonce2.to_hex());
+}
+
+#[test]
+fn test_session_nonce_roundtrip() {
+    let nonce = SessionNonce::generate();
+    let hex = nonce.to_hex();
+    let parsed = SessionNonce::from_hex(&hex).unwrap();
+
+    assert_eq!(nonce, parsed);
+}
+
+#[test]
+fn test_session_deadline_valid() {
+    let deadline = SessionDeadline::new(300);
+
+    assert!(!deadline.is_expired());
+    assert!(deadline.validate().is_ok());
+    assert!(deadline.remaining().is_some());
+}
+
+#[test]
+fn test_session_deadline_expired() {
+    let deadline = SessionDeadline::from_timestamps(1000, 1001);
+
+    assert!(deadline.is_expired());
+    assert!(deadline.validate().is_err());
+    assert!(deadline.remaining().is_none());
+}
+
+#[test]
+fn test_transcript_digest_deterministic() {
+    let nonce = SessionNonce::from_bytes([1u8; 32]);
+    let elements = vec![[2u8; 32], [3u8; 32]];
+
+    let digest1 = TranscriptDigest::compute("session-1", &nonce, None, &elements, None, None);
+    let digest2 = TranscriptDigest::compute("session-1", &nonce, None, &elements, None, None);
+
+    assert_eq!(digest1, digest2);
+}
+
+#[test]
+fn test_transcript_digest_different_nonces() {
+    let nonce1 = SessionNonce::from_bytes([1u8; 32]);
+    let nonce2 = SessionNonce::from_bytes([2u8; 32]);
+    let elements = vec![[3u8; 32]];
+
+    let digest1 = TranscriptDigest::compute("session", &nonce1, None, &elements, None, None);
+    let digest2 = TranscriptDigest::compute("session", &nonce2, None, &elements, None, None);
+
+    assert_ne!(digest1, digest2);
+}
+
+// === Replay Store Tests ===
+
+#[test]
+fn test_replay_store_fresh_nonce_accepted() {
+    let store = ReplayStore::new();
+    let nonce = SessionNonce::generate();
+
+    assert!(store.check_nonce(&nonce).is_ok());
+}
+
+#[test]
+fn test_replay_store_duplicate_nonce_rejected() {
+    let mut store = ReplayStore::new();
+    let nonce = SessionNonce::generate();
+
+    store.record_nonce(nonce, Some("session-1")).unwrap();
+
+    let result = store.check_nonce(&nonce);
+    assert!(result.is_err());
+    assert!(matches!(result.unwrap_err(), FreshnessError::ReplayDetected(_)));
+}
+
+#[test]
+fn test_replay_store_transcript_tracking() {
+    let mut store = ReplayStore::new();
+    let nonce = SessionNonce::generate();
+    let digest = TranscriptDigest::compute("session", &nonce, None, &[], None, None);
+
+    assert!(store.record_digest(digest, Some("session")).is_ok());
+    assert!(store.record_digest(digest, Some("session")).is_err());
+}
+
+// === V2 Session with Freshness ===
+
+#[test]
+fn test_v2_session_generates_freshness_fields() {
+    let set_a = make_set(&[json!({"x": 1})]);
+    let config = SessionConfig::with_ttl(300);
+
+    let mut session = InitiatorSession::with_config(
+        "fresh-session",
+        set_a,
+        IntersectionMode::Intersection,
+        config,
+    )
+    .unwrap();
+
+    let offer = session.generate_offer().unwrap();
+
+    assert!(offer.has_freshness());
+    assert!(offer.nonce.is_some());
+    assert!(offer.issued_at.is_some());
+    assert!(offer.expires_at.is_some());
+}
+
+#[test]
+fn test_v2_session_full_flow_with_freshness() {
+    let set_a = make_set(&[json!({"x": 1}), json!({"x": 2}), json!({"x": 3})]);
+    let set_b = make_set(&[json!({"x": 2}), json!({"x": 3}), json!({"x": 4})]);
+
+    let config = SessionConfig::with_ttl(300);
+
+    let mut initiator = InitiatorSession::with_config(
+        "v2-test",
+        set_a.clone(),
+        IntersectionMode::Intersection,
+        config.clone(),
+    )
+    .unwrap();
+
+    let mut responder = ResponderSession::with_config(
+        "v2-test",
+        set_b.clone(),
+        IntersectionMode::Intersection,
+        config,
+    )
+    .unwrap();
+
+    let offer = initiator.generate_offer().unwrap();
+    assert!(offer.has_freshness());
+
+    let reply = responder.process_offer_and_reply(&offer).unwrap();
+    assert!(reply.has_freshness());
+
+    let result = initiator.process_reply(&reply).unwrap();
+
+    match result {
+        PsiResult::Intersection { ids, .. } => assert_eq!(ids.len(), 2),
+        _ => panic!("expected intersection result"),
+    }
+
+    assert!(initiator.responder_nonce().is_some());
+    assert!(responder.initiator_nonce().is_some());
+}
+
+// === Wire-Bound Receipt Tests ===
+
+#[test]
+fn test_wire_bound_receipt_creation_and_verification() {
+    let set_a = make_set(&[json!({"a": 1}), json!({"a": 2})]);
+    let set_b = make_set(&[json!({"a": 2}), json!({"b": 1})]);
+
+    let protocol = PsiProtocol::new();
+    let result = protocol
+        .intersect(&set_a, &set_b, IntersectionMode::Intersection)
+        .unwrap();
+
+    let init_nonce = SessionNonce::generate();
+    let resp_nonce = SessionNonce::generate();
+    let transcript = TranscriptDigest::compute(
+        "bound-session",
+        &init_nonce,
+        Some(&resp_nonce),
+        &[[1u8; 32]],
+        Some(&[[2u8; 32]]),
+        Some(&[[3u8; 32]]),
+    );
+
+    let signer = ReceiptSigner::new();
+    let receipt = signer.sign_wire_bound(
+        "bound-session",
+        transcript,
+        init_nonce,
+        resp_nonce,
+        set_a.root(),
+        set_b.root(),
+        &result,
+        IntersectionMode::Intersection,
+    );
+
+    let verifier = ReceiptVerifier::new();
+    assert!(verifier.verify_wire_bound(&receipt).is_ok());
+
+    assert!(verifier
+        .verify_wire_bound_with_bindings(&receipt, "bound-session", &transcript, set_a.root(), set_b.root())
+        .is_ok());
+}
+
+#[test]
+fn test_wire_bound_receipt_wrong_session_rejected() {
+    let set_a = make_set(&[json!({"a": 1})]);
+    let set_b = make_set(&[json!({"b": 1})]);
+
+    let protocol = PsiProtocol::new();
+    let result = protocol
+        .intersect(&set_a, &set_b, IntersectionMode::Intersection)
+        .unwrap();
+
+    let init_nonce = SessionNonce::generate();
+    let resp_nonce = SessionNonce::generate();
+    let transcript = TranscriptDigest::compute("session-1", &init_nonce, None, &[], None, None);
+
+    let signer = ReceiptSigner::new();
+    let receipt = signer.sign_wire_bound(
+        "session-1",
+        transcript,
+        init_nonce,
+        resp_nonce,
+        set_a.root(),
+        set_b.root(),
+        &result,
+        IntersectionMode::Intersection,
+    );
+
+    let verifier = ReceiptVerifier::new();
+    let result = verifier.verify_wire_bound_with_bindings(
+        &receipt,
+        "session-WRONG",
+        &transcript,
+        set_a.root(),
+        set_b.root(),
+    );
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_wire_bound_receipt_json_serialization() {
+    let set_a = make_set(&[json!({"a": 1})]);
+    let set_b = make_set(&[json!({"b": 1})]);
+
+    let protocol = PsiProtocol::new();
+    let result = protocol
+        .intersect(&set_a, &set_b, IntersectionMode::Intersection)
+        .unwrap();
+
+    let init_nonce = SessionNonce::generate();
+    let resp_nonce = SessionNonce::generate();
+    let transcript = TranscriptDigest::compute("session", &init_nonce, None, &[], None, None);
+
+    let signer = ReceiptSigner::new();
+    let receipt = signer.sign_wire_bound(
+        "session",
+        transcript,
+        init_nonce,
+        resp_nonce,
+        set_a.root(),
+        set_b.root(),
+        &result,
+        IntersectionMode::Intersection,
+    );
+
+    let json = serde_json::to_string_pretty(&receipt).unwrap();
+    let parsed: WireBoundReceipt = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(receipt.session_id, parsed.session_id);
+    assert_eq!(receipt.transcript_digest, parsed.transcript_digest);
+    assert_eq!(receipt.initiator_nonce, parsed.initiator_nonce);
+    assert_eq!(receipt.responder_nonce, parsed.responder_nonce);
+    assert_eq!(receipt.signature, parsed.signature);
+
+    let verifier = ReceiptVerifier::new();
+    assert!(verifier.verify_wire_bound(&parsed).is_ok());
+}
+
+// === V2 Wire Message Tests ===
+
+#[test]
+fn test_v2_offer_wire_roundtrip() {
+    let nonce = SessionNonce::generate();
+    let deadline = SessionDeadline::new(300);
+    let elements = vec![[1u8; 32], [2u8; 32]];
+
+    let offer = MaskedSetOffer::new_v2("v2-session", elements.clone(), nonce, deadline);
+
+    assert!(offer.has_freshness());
+    assert_eq!(offer.version, 2);
+
+    let message = WireMessage::Offer(offer.clone());
+    let json = wire_encode(&message).unwrap();
+    let decoded = wire_decode(&json).unwrap();
+
+    match decoded {
+        WireMessage::Offer(decoded_offer) => {
+            assert_eq!(decoded_offer.version, 2);
+            assert_eq!(decoded_offer.nonce, offer.nonce);
+            assert_eq!(decoded_offer.masked_elements, elements);
+        }
+        _ => panic!("expected offer"),
+    }
+}
+
+#[test]
+fn test_v2_reply_wire_roundtrip() {
+    let init_nonce = SessionNonce::generate();
+    let resp_nonce = SessionNonce::generate();
+    let deadline = SessionDeadline::new(300);
+
+    let reply = MaskedSetReply::new_v2(
+        "v2-session",
+        vec![[1u8; 32]],
+        vec![[2u8; 32]],
+        init_nonce,
+        resp_nonce,
+        deadline,
+    );
+
+    assert!(reply.has_freshness());
+    assert_eq!(reply.version, 2);
+
+    let message = WireMessage::Reply(reply.clone());
+    let json = wire_encode(&message).unwrap();
+    let decoded = wire_decode(&json).unwrap();
+
+    match decoded {
+        WireMessage::Reply(decoded_reply) => {
+            assert_eq!(decoded_reply.version, 2);
+            assert_eq!(decoded_reply.initiator_nonce, reply.initiator_nonce);
+            assert_eq!(decoded_reply.responder_nonce, reply.responder_nonce);
+        }
+        _ => panic!("expected reply"),
+    }
+}
+
+// === Mixed v1/v2 Compatibility ===
+
+#[test]
+fn test_v2_session_with_v1_messages_still_works() {
+    let set_a = make_set(&[json!({"x": 1}), json!({"x": 2})]);
+    let set_b = make_set(&[json!({"x": 2}), json!({"x": 3})]);
+
+    let mut initiator = InitiatorSession::with_secret(
+        "compat-test",
+        set_a,
+        IntersectionMode::Intersection,
+        [1u8; 32],
+    )
+    .unwrap();
+
+    let mut responder = ResponderSession::with_secret(
+        "compat-test",
+        set_b,
+        IntersectionMode::Intersection,
+        [2u8; 32],
+    )
+    .unwrap();
+
+    let offer = initiator.generate_offer().unwrap();
+    assert!(!offer.has_freshness());
+
+    let reply = responder.process_offer_and_reply(&offer).unwrap();
+    let result = initiator.process_reply(&reply).unwrap();
+
+    match result {
+        PsiResult::Intersection { ids, .. } => assert_eq!(ids.len(), 1),
+        _ => panic!("expected intersection"),
+    }
+}
