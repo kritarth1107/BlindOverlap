@@ -10,6 +10,7 @@ pub mod freshness;
 pub mod padding;
 pub mod protocol;
 pub mod receipt;
+pub mod replay;
 pub mod session;
 pub mod wire;
 
@@ -35,3 +36,4 @@ pub use freshness::{
     current_unix_time, FreshnessError, SessionDeadline, SessionNonce, TranscriptDigest,
     DEFAULT_TTL_SECS,
 };
+pub use replay::ReplayStore;
