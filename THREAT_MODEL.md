@@ -1,6 +1,6 @@
 # BlindOverlap Threat Model
 
-This document describes the security model, assumptions, and known limitations of BlindOverlap v0.2.0.
+This document describes the security model, assumptions, and known limitations of BlindOverlap v0.3.0.
 
 ## Security Model: Semi-Honest
 
@@ -126,17 +126,59 @@ The wire protocol introduces additional attack surface:
 - No built-in message authentication or encryption
 - **Use TLS** for transport security in production
 
-### Session Management
+### Session Management (Updated in v0.3.0)
 
 - Session IDs correlate multi-round exchanges
-- No built-in session expiry or replay protection
-- Applications should implement their own session management
+- **v0.3.0 adds session freshness primitives:**
+  - `SessionNonce`: 32-byte cryptographic nonces for session binding
+  - `SessionDeadline`: TTL enforcement with `issued_at` / `expires_at`
+  - `ReplayStore`: In-memory tracking of used nonces and transcripts
+- These are **best-effort aids under the semi-honest model**
+- Freshness does NOT provide protection against active adversaries
+- Applications may need more robust replay tracking for production
+- See "Session Freshness Limitations" below for details
 
 ### Denial of Service
 
 - No rate limiting built-in
 - Large messages could cause memory exhaustion
 - The 4096 element limit provides some protection
+
+## Session Freshness Limitations (v0.3.0)
+
+BlindOverlap v0.3.0 introduces session freshness primitives for **best-effort** replay protection.
+
+### What Freshness Provides
+
+✅ Under the semi-honest model:
+- Session binding via cryptographic nonces
+- Message expiry via TTL (default 300 seconds)
+- Duplicate detection via `ReplayStore`
+- Transcript binding in wire-bound receipts
+
+### What Freshness Does NOT Provide
+
+❌ No protection against:
+- Active adversaries who manipulate clocks
+- Malicious parties who ignore TTL/nonce checks
+- Replay attacks across application restarts (ReplayStore is in-memory)
+- Persistent replay protection without external storage
+
+### Freshness Implementation Notes
+
+⚠️ **Best-effort, not security guarantees:**
+- `SessionDeadline`: Validates timestamps but relies on honest clocks
+- `SessionNonce`: Provides binding but no mutual authentication
+- `ReplayStore`: In-memory only, TTL-based cleanup for memory management
+- `WireBoundReceipt`: Binds to transcript but relies on honest signing
+
+### Recommended Practices for Freshness
+
+- Use wire-bound receipts to audit protocol executions
+- Configure appropriate TTL for your use case
+- Consider persisting nonces if replay across restarts is a concern
+- Use TLS to protect message integrity in transit
+- Don't rely on freshness alone for security-critical decisions
 
 ## Scale Limitations
 
@@ -200,13 +242,15 @@ BlindOverlap's security relies on:
 | Memory side channels | ⚠️ Not hardened | No memory clearing |
 | Key reuse | ⚠️ Risk | Fresh keys recommended per session |
 
-### Wire Protocol (v0.2.0)
+### Wire Protocol (v0.3.0)
 
 | Attack | Status | Notes |
 |--------|--------|-------|
 | Message tampering | ⚠️ Possible | Use TLS for transport security |
-| Session hijacking | ⚠️ Possible | No built-in authentication |
-| Message replay | ⚠️ Possible | Application must handle |
+| Session hijacking | ⚠️ Possible | Nonces provide binding, not auth |
+| Message replay | ⚠️ Mitigated | TTL + ReplayStore (semi-honest only) |
+| Clock manipulation | ⚠️ Possible | TTL relies on honest clocks |
+| Nonce reuse | ⚠️ Detectable | Via ReplayStore (in-memory only) |
 
 ## Recommendations for Users
 
@@ -216,13 +260,16 @@ BlindOverlap's security relies on:
 4. **Don't trust cardinality alone** for sensitive decisions
 5. **Limit set sizes** to reasonable amounts
 6. **Audit the code** if using for anything beyond experimentation
-7. **Use TLS** for network transport (v0.2.0)
-8. **Use padding** if set size is sensitive (v0.2.0)
-9. **Keep padding secrets confidential** (v0.2.0)
+7. **Use TLS** for network transport (v0.2.0+)
+8. **Use padding** if set size is sensitive (v0.2.0+)
+9. **Keep padding secrets confidential** (v0.2.0+)
+10. **Use wire-bound receipts** for auditable session binding (v0.3.0)
+11. **Configure appropriate TTL** for your session lifetime needs (v0.3.0)
+12. **Track nonces** if replay across restarts is a concern (v0.3.0)
 
 ## Future Considerations
 
-Potential improvements (not in scope for v0.2.0):
+Potential improvements (not in scope for v0.3.0):
 
 - Malicious security via VOLE-PSI or zkSNARKs
 - Constant-time implementations
@@ -230,6 +277,8 @@ Potential improvements (not in scope for v0.2.0):
 - Streaming/batched protocols for larger sets
 - Built-in TLS transport
 - Formal security proofs
+- Persistent replay protection storage
+- Mutual authentication for sessions
 
 ## References
 
@@ -239,4 +288,4 @@ Potential improvements (not in scope for v0.2.0):
 
 ---
 
-**Last Updated**: v0.2.0
+**Last Updated**: v0.3.0

@@ -13,7 +13,9 @@ BlindOverlap is an agent-native private set intersection (PSI) library for conte
 - **Wire protocol**: JSON-serializable messages for network-based PSI exchanges (v0.2.0)
 - **Online sessions**: State machine API for two-party PSI over wire messages (v0.2.0)
 - **Set-size padding**: Hide real set cardinality from wire message length analysis (v0.2.0)
-- **CLI tool**: Encode facts, run intersections, wire encode/decode, online sessions
+- **Session freshness**: Nonces, TTL, and replay protection primitives (v0.3.0)
+- **Wire-bound receipts**: Receipts bound to specific sessions and transcripts (v0.3.0)
+- **CLI tool**: Encode facts, run intersections, wire encode/decode, online sessions, receipts
 
 ## Honest Scope & Limitations
 
@@ -24,10 +26,11 @@ BlindOverlap is an agent-native private set intersection (PSI) library for conte
 | Fuzzy/embedding PSI | ❌ NOT supported (exact match only) |
 | Cardinality mode | ⚠️ Leaks intersection size |
 | Padding | ⚠️ Best-effort size hiding (semi-honest only) |
+| Freshness | ⚠️ Best-effort TTL/replay (semi-honest only) |
 | Scale | **Toy scale**: ≤4,096 IDs per set, 32 bytes each |
 | Production readiness | ❌ **NOT production ready** — for experimentation only |
 
-> **Warning**: This is a v0.2.0 release intended for experimentation and learning. Do not use in production systems where security is critical. See [THREAT_MODEL.md](THREAT_MODEL.md) for details.
+> **Warning**: This is a v0.3.0 release intended for experimentation and learning. Do not use in production systems where security is critical. See [THREAT_MODEL.md](THREAT_MODEL.md) for details.
 
 ## Quick Start
 
@@ -127,6 +130,48 @@ blindoverlap receipt-sign \
 blindoverlap receipt-verify --receipt receipt.json
 ```
 
+### Session Freshness (v0.3.0)
+
+```bash
+# Online session with custom TTL (60 seconds)
+blindoverlap online-offer \
+  --input set_a.ids \
+  --session "fresh-session" \
+  --ttl-secs 60 \
+  --state-out a_state.json \
+  --output offer.json
+
+# Responder with matching TTL
+blindoverlap online-reply \
+  --input set_b.ids \
+  --offer offer.json \
+  --ttl-secs 60 \
+  --state-out b_state.json \
+  --output reply.json
+```
+
+### Wire-Bound Receipts (v0.3.0)
+
+```bash
+# Sign a wire-bound receipt (binds to session and transcript)
+blindoverlap wire-bound-sign \
+  --session "my-session" \
+  --offer offer.json \
+  --reply reply.json \
+  --root-a $ROOT_A \
+  --root-b $ROOT_B \
+  --result intersection.ids \
+  --mode intersection \
+  --output wire_receipt.json
+
+# Verify with transcript checking
+blindoverlap wire-bound-verify \
+  --receipt wire_receipt.json \
+  --expect-session "my-session" \
+  --offer offer.json \
+  --reply reply.json
+```
+
 ## Library Usage
 
 ```rust
@@ -169,10 +214,12 @@ let responder_result = responder.process_reveal(&reveal)?;
 |--------|-------------|
 | `fact_id` | RFC 8785 canonical JSON hashing, FactSet with merkle root |
 | `protocol` | DH-PSI implementation using X25519 |
-| `receipt` | Ed25519 signed intersection receipts |
-| `wire` | JSON wire protocol for network exchanges (v0.2.0) |
-| `session` | Online two-party PSI state machine (v0.2.0) |
-| `padding` | Set-size padding with domain-separated PRF (v0.2.0) |
+| `receipt` | Ed25519 signed receipts (basic and wire-bound) |
+| `wire` | JSON wire protocol for network exchanges (v0.2.0+) |
+| `session` | Online two-party PSI state machine (v0.2.0+) |
+| `padding` | Set-size padding with domain-separated PRF (v0.2.0+) |
+| `freshness` | Session nonces, deadlines, transcript digests (v0.3.0) |
+| `replay` | In-memory replay protection store (v0.3.0) |
 
 ## CLI Commands
 
@@ -186,10 +233,12 @@ let responder_result = responder.process_reveal(&reveal)?;
 | `card` | Output set cardinality and root |
 | `wire-encode` | Encode wire protocol message |
 | `wire-decode` | Decode and display wire message |
-| `online-offer` | Generate initiator offer (v0.2.0) |
-| `online-reply` | Process offer, generate reply (v0.2.0) |
-| `online-complete` | Process reply, compute intersection (v0.2.0) |
-| `online-reveal` | Process reveal for bilateral mode (v0.2.0) |
+| `online-offer` | Generate initiator offer with `--ttl-secs` (v0.2.0+) |
+| `online-reply` | Process offer, generate reply with `--ttl-secs` (v0.2.0+) |
+| `online-complete` | Process reply, compute intersection (v0.2.0+) |
+| `online-reveal` | Process reveal for bilateral mode (v0.2.0+) |
+| `wire-bound-sign` | Create session-bound receipt (v0.3.0) |
+| `wire-bound-verify` | Verify wire-bound receipt with transcript (v0.3.0) |
 
 ## Protocol Overview
 

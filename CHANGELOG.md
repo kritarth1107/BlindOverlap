@@ -5,6 +5,75 @@ All notable changes to BlindOverlap will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-09-19
+
+### Added
+
+- **Session Freshness (`freshness` module)**
+  - `SessionNonce`: 32-byte cryptographic nonce for session binding
+  - `SessionDeadline`: TTL enforcement with `issued_at` / `expires_at` timestamps
+  - `TranscriptDigest`: Domain-separated hash over wire messages for binding
+  - `FreshnessError`: Typed errors for expiry, nonce mismatch, replay detection
+  - `current_unix_time()` helper and `DEFAULT_TTL_SECS` (300 seconds)
+
+- **Wire Protocol v2**
+  - Protocol version bump with new domain tags (`BlindOverlap:*:v2`)
+  - `MaskedSetOffer`: adds `nonce`, `issued_at`, `expires_at` fields
+  - `MaskedSetReply`: adds `initiator_nonce`, `responder_nonce`, timestamps
+  - `IntersectionReveal`: adds freshness fields for bilateral sessions
+  - `WireError::MissingFreshness` for v2 validation failures
+  - `new_v2()` constructors and `has_freshness()` methods
+  - Backward compatible: v1 messages still work
+
+- **Session API Updates**
+  - `SessionConfig`: Configure TTL and protocol version
+  - `with_config()` constructor for custom session settings
+  - Sessions default to v2 with freshness (300s TTL)
+  - `process_reply()` validates nonce echo and deadline expiry
+  - `process_offer_and_reply()` validates offer deadline
+  - `nonce()`, `responder_nonce()`, `initiator_nonce()` getters
+  - `SessionError::Freshness`, `NonceMismatch`, `VersionMismatch`
+
+- **Replay Protection (`replay` module)**
+  - `ReplayStore`: In-memory tracking of used nonces and transcript digests
+  - `check_nonce()` / `record_nonce()` for nonce tracking
+  - `check_digest()` / `record_digest()` for transcript tracking
+  - TTL-based expiry for memory management
+  - Configurable limits: default 1 hour TTL, 100k max entries
+
+- **Wire-Bound Receipts**
+  - `WireBoundReceipt`: Binds to session_id + transcript digest + nonces
+  - Stronger binding than basic `IntersectionReceipt`
+  - `ReceiptSigner::sign_wire_bound()` for creating bound receipts
+  - `ReceiptVerifier::verify_wire_bound_with_bindings()` for full validation
+  - `ReceiptError::SessionMismatch`, `TranscriptMismatch` variants
+
+- **CLI Commands**
+  - `--ttl-secs` flag on `online-offer` and `online-reply`
+  - `wire-bound-sign`: Create session-bound receipts
+  - `wire-bound-verify`: Verify with transcript validation
+  - State files now include `nonce_hex` and `ttl_secs`
+
+- **Tests**
+  - 46 integration tests covering freshness, replay, TTL, wire-bound receipts
+  - V1/V2 compatibility tests
+  - Nonce/digest roundtrip tests
+
+### Changed
+
+- Sessions now default to v2 protocol with freshness
+- Wire messages include optional freshness fields
+- Session state structs include nonce tracking
+- Documentation updated for v0.3.0 features
+
+### Security Notes
+
+- **Freshness is best-effort under semi-honest model**
+- TTL and nonce validation help prevent accidental replay
+- Does NOT provide protection against active adversaries
+- ReplayStore is in-memory only (does not persist)
+- Applications may need more robust replay tracking for production
+
 ## [0.2.0] - 2026-09-18
 
 ### Added
@@ -110,5 +179,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - NOT production-ready
 - Maximum 4,096 elements per set
 
+[0.3.0]: https://github.com/kritarth1107/BlindOverlap/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/kritarth1107/BlindOverlap/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/kritarth1107/BlindOverlap/releases/tag/v0.1.0
