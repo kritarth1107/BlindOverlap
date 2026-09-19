@@ -222,7 +222,10 @@ mod tests {
 
         let result = store.check_nonce(&nonce);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), FreshnessError::ReplayDetected(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            FreshnessError::ReplayDetected(_)
+        ));
     }
 
     #[test]
@@ -263,7 +266,10 @@ mod tests {
 
         let result = store.check_digest(&digest);
         assert!(result.is_err());
-        assert!(matches!(result.unwrap_err(), FreshnessError::ReplayDetected(_)));
+        assert!(matches!(
+            result.unwrap_err(),
+            FreshnessError::ReplayDetected(_)
+        ));
     }
 
     #[test]

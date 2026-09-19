@@ -841,6 +841,7 @@ struct ResponderState {
     ttl_secs: Option<u64>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_online_offer(
     input: &std::path::Path,
     session: &str,
@@ -919,6 +920,7 @@ fn cmd_online_offer(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_online_reply(
     input: &std::path::Path,
     offer_path: &std::path::Path,
@@ -1193,6 +1195,7 @@ fn load_fact_ids_from_reader<R: BufRead>(
     Ok(ids)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_wire_bound_sign(
     session: &str,
     offer_path: &std::path::Path,

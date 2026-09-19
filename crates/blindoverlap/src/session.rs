@@ -72,7 +72,9 @@ pub enum SessionError {
         got: String,
     },
     /// Protocol version mismatch.
-    #[error("protocol version mismatch: session is v{session_version}, message is v{message_version}")]
+    #[error(
+        "protocol version mismatch: session is v{session_version}, message is v{message_version}"
+    )]
     VersionMismatch {
         /// Session protocol version.
         session_version: u8,

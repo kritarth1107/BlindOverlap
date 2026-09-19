@@ -227,14 +227,14 @@ impl TranscriptDigest {
         }
 
         hasher.update(b":offer_elements:");
-        hasher.update(&(offer_elements.len() as u64).to_le_bytes());
+        hasher.update((offer_elements.len() as u64).to_le_bytes());
         for elem in offer_elements {
             hasher.update(elem);
         }
 
         if let Some(resp_masked) = reply_responder_masked {
             hasher.update(b":reply_responder_masked:");
-            hasher.update(&(resp_masked.len() as u64).to_le_bytes());
+            hasher.update((resp_masked.len() as u64).to_le_bytes());
             for elem in resp_masked {
                 hasher.update(elem);
             }
@@ -242,7 +242,7 @@ impl TranscriptDigest {
 
         if let Some(init_doubly) = reply_initiator_doubly_masked {
             hasher.update(b":reply_initiator_doubly_masked:");
-            hasher.update(&(init_doubly.len() as u64).to_le_bytes());
+            hasher.update((init_doubly.len() as u64).to_le_bytes());
             for elem in init_doubly {
                 hasher.update(elem);
             }
@@ -426,9 +426,16 @@ mod tests {
         let resp_nonce = SessionNonce::from_bytes([2u8; 32]);
         let elements = vec![[3u8; 32]];
 
-        let digest1 =
-            TranscriptDigest::compute("session", &init_nonce, Some(&resp_nonce), &elements, None, None);
-        let digest2 = TranscriptDigest::compute("session", &init_nonce, None, &elements, None, None);
+        let digest1 = TranscriptDigest::compute(
+            "session",
+            &init_nonce,
+            Some(&resp_nonce),
+            &elements,
+            None,
+            None,
+        );
+        let digest2 =
+            TranscriptDigest::compute("session", &init_nonce, None, &elements, None, None);
 
         assert_ne!(digest1, digest2);
     }

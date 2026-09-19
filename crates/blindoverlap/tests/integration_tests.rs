@@ -747,7 +747,10 @@ fn test_replay_store_duplicate_nonce_rejected() {
 
     let result = store.check_nonce(&nonce);
     assert!(result.is_err());
-    assert!(matches!(result.unwrap_err(), FreshnessError::ReplayDetected(_)));
+    assert!(matches!(
+        result.unwrap_err(),
+        FreshnessError::ReplayDetected(_)
+    ));
 }
 
 #[test]
@@ -862,7 +865,13 @@ fn test_wire_bound_receipt_creation_and_verification() {
     assert!(verifier.verify_wire_bound(&receipt).is_ok());
 
     assert!(verifier
-        .verify_wire_bound_with_bindings(&receipt, "bound-session", &transcript, set_a.root(), set_b.root())
+        .verify_wire_bound_with_bindings(
+            &receipt,
+            "bound-session",
+            &transcript,
+            set_a.root(),
+            set_b.root()
+        )
         .is_ok());
 }
 

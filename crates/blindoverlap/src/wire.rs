@@ -108,14 +108,19 @@ impl MaskedSetOffer {
     /// Get the deadline if freshness fields are present.
     pub fn deadline(&self) -> Option<SessionDeadline> {
         match (self.issued_at, self.expires_at) {
-            (Some(issued), Some(expires)) => Some(SessionDeadline::from_timestamps(issued, expires)),
+            (Some(issued), Some(expires)) => {
+                Some(SessionDeadline::from_timestamps(issued, expires))
+            }
             _ => None,
         }
     }
 
     /// Check if this is a v2 message with freshness fields.
     pub fn has_freshness(&self) -> bool {
-        self.version >= 2 && self.nonce.is_some() && self.issued_at.is_some() && self.expires_at.is_some()
+        self.version >= 2
+            && self.nonce.is_some()
+            && self.issued_at.is_some()
+            && self.expires_at.is_some()
     }
 
     /// Validate message structure.
@@ -227,7 +232,9 @@ impl MaskedSetReply {
     /// Get the deadline if freshness fields are present.
     pub fn deadline(&self) -> Option<SessionDeadline> {
         match (self.issued_at, self.expires_at) {
-            (Some(issued), Some(expires)) => Some(SessionDeadline::from_timestamps(issued, expires)),
+            (Some(issued), Some(expires)) => {
+                Some(SessionDeadline::from_timestamps(issued, expires))
+            }
             _ => None,
         }
     }
@@ -341,7 +348,9 @@ impl IntersectionReveal {
     /// Get the deadline if freshness fields are present.
     pub fn deadline(&self) -> Option<SessionDeadline> {
         match (self.issued_at, self.expires_at) {
-            (Some(issued), Some(expires)) => Some(SessionDeadline::from_timestamps(issued, expires)),
+            (Some(issued), Some(expires)) => {
+                Some(SessionDeadline::from_timestamps(issued, expires))
+            }
             _ => None,
         }
     }

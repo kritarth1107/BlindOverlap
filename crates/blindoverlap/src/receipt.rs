@@ -385,6 +385,7 @@ impl ReceiptSigner {
     }
 
     /// Sign a wire-bound receipt that binds to a specific session and transcript.
+    #[allow(clippy::too_many_arguments)]
     pub fn sign_wire_bound(
         &self,
         session_id: impl Into<String>,
@@ -623,7 +624,13 @@ mod tests {
         let verifier = ReceiptVerifier::new();
         assert!(verifier.verify_wire_bound(&receipt).is_ok());
         assert!(verifier
-            .verify_wire_bound_with_bindings(&receipt, "test-session", &transcript, set_a.root(), set_b.root())
+            .verify_wire_bound_with_bindings(
+                &receipt,
+                "test-session",
+                &transcript,
+                set_a.root(),
+                set_b.root()
+            )
             .is_ok());
     }
 
@@ -715,7 +722,8 @@ mod tests {
         let init_nonce = SessionNonce::generate();
         let resp_nonce = SessionNonce::generate();
         let transcript = TranscriptDigest::compute("session", &init_nonce, None, &[], None, None);
-        let wrong_transcript = TranscriptDigest::compute("session", &resp_nonce, None, &[], None, None);
+        let wrong_transcript =
+            TranscriptDigest::compute("session", &resp_nonce, None, &[], None, None);
 
         let signer = ReceiptSigner::new();
         let receipt = signer.sign_wire_bound(
