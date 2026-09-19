@@ -24,7 +24,10 @@ pub use padding::{
 pub use protocol::{
     IntersectionMode, MaskedElement, PsiError, PsiParty, PsiProtocol, PsiResult, MAX_SET_SIZE,
 };
-pub use receipt::{IntersectionReceipt, ReceiptError, ReceiptMode, ReceiptSigner, ReceiptVerifier};
+pub use receipt::{
+    IntersectionReceipt, ReceiptError, ReceiptMode, ReceiptSigner, ReceiptVerifier,
+    WireBoundReceipt,
+};
 pub use session::{
     InitiatorSession, InitiatorState, ResponderSession, ResponderState, SessionConfig, SessionError,
 };
