@@ -4,7 +4,8 @@ use blindoverlap::{
     canonical_json, fact_id_from_str, pad_masked_elements, wire_decode, wire_encode,
     wire_encode_pretty, FactSet, InitiatorSession, IntersectionMode, IntersectionReceipt,
     MaskedSetOffer, MaskedSetReply, PaddingConfig, PsiProtocol, PsiResult, ReceiptSigner,
-    ReceiptVerifier, ResponderSession, WireMessage,
+    ReceiptVerifier, ResponderSession, SessionConfig, SessionNonce, TranscriptDigest,
+    WireBoundReceipt, WireMessage, DEFAULT_TTL_SECS,
 };
 use clap::{Parser, Subcommand};
 use std::fs;
@@ -169,6 +170,10 @@ enum Commands {
         #[arg(long, default_value = "intersection")]
         mode: String,
 
+        /// Session TTL in seconds (default: 300)
+        #[arg(long)]
+        ttl_secs: Option<u64>,
+
         /// Pad to target size
         #[arg(long)]
         pad_to: Option<usize>,
@@ -199,6 +204,10 @@ enum Commands {
         /// Mode: intersection or cardinality
         #[arg(long, default_value = "intersection")]
         mode: String,
+
+        /// Session TTL in seconds (default: 300)
+        #[arg(long)]
+        ttl_secs: Option<u64>,
 
         /// Pad to target size
         #[arg(long)]
@@ -253,6 +262,72 @@ enum Commands {
         /// Output file for result (default: stdout)
         #[arg(short, long)]
         output: Option<PathBuf>,
+    },
+
+    /// Sign a wire-bound receipt (binds to session and transcript)
+    WireBoundSign {
+        /// Session ID
+        #[arg(long)]
+        session: String,
+
+        /// Offer message file (JSON)
+        #[arg(long)]
+        offer: PathBuf,
+
+        /// Reply message file (JSON)
+        #[arg(long)]
+        reply: PathBuf,
+
+        /// Set root A (hex)
+        #[arg(long)]
+        root_a: String,
+
+        /// Set root B (hex)
+        #[arg(long)]
+        root_b: String,
+
+        /// Intersection result file (hex IDs, one per line) or cardinality count
+        #[arg(long)]
+        result: String,
+
+        /// Mode: intersection or cardinality
+        #[arg(long, default_value = "intersection")]
+        mode: String,
+
+        /// Signing key seed (hex, 32 bytes). If not provided, generates random key.
+        #[arg(long)]
+        key_seed: Option<String>,
+
+        /// Output file for receipt (JSON). Default: stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Verify a wire-bound receipt
+    WireBoundVerify {
+        /// Receipt file (JSON)
+        #[arg(short, long)]
+        receipt: PathBuf,
+
+        /// Expected session ID (optional)
+        #[arg(long)]
+        expect_session: Option<String>,
+
+        /// Offer message file for transcript verification (optional)
+        #[arg(long)]
+        offer: Option<PathBuf>,
+
+        /// Reply message file for transcript verification (optional)
+        #[arg(long)]
+        reply: Option<PathBuf>,
+
+        /// Expected set root A (hex, optional)
+        #[arg(long)]
+        expect_root_a: Option<String>,
+
+        /// Expected set root B (hex, optional)
+        #[arg(long)]
+        expect_root_b: Option<String>,
     },
 }
 
@@ -330,6 +405,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             input,
             session,
             mode,
+            ttl_secs,
             pad_to,
             pad_secret,
             output,
@@ -338,6 +414,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             &input,
             &session,
             &mode,
+            ttl_secs,
             pad_to,
             pad_secret.as_deref(),
             output.as_deref(),
@@ -348,6 +425,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             input,
             offer,
             mode,
+            ttl_secs,
             pad_to,
             pad_secret,
             output,
@@ -356,6 +434,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             &input,
             &offer,
             &mode,
+            ttl_secs,
             pad_to,
             pad_secret.as_deref(),
             output.as_deref(),
@@ -381,6 +460,44 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             state,
             output,
         } => cmd_online_reveal(&reveal, &state, output.as_deref())?,
+
+        Commands::WireBoundSign {
+            session,
+            offer,
+            reply,
+            root_a,
+            root_b,
+            result,
+            mode,
+            key_seed,
+            output,
+        } => cmd_wire_bound_sign(
+            &session,
+            &offer,
+            &reply,
+            &root_a,
+            &root_b,
+            &result,
+            &mode,
+            key_seed.as_deref(),
+            output.as_deref(),
+        )?,
+
+        Commands::WireBoundVerify {
+            receipt,
+            expect_session,
+            offer,
+            reply,
+            expect_root_a,
+            expect_root_b,
+        } => cmd_wire_bound_verify(
+            &receipt,
+            expect_session.as_deref(),
+            offer.as_deref(),
+            reply.as_deref(),
+            expect_root_a.as_deref(),
+            expect_root_b.as_deref(),
+        )?,
     }
 
     Ok(())
@@ -701,6 +818,10 @@ struct InitiatorState {
     fact_ids_hex: Vec<String>,
     secret_hex: String,
     masked_elements_hex: Vec<String>,
+    #[serde(default)]
+    nonce_hex: Option<String>,
+    #[serde(default)]
+    ttl_secs: Option<u64>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -712,12 +833,19 @@ struct ResponderState {
     secret_hex: String,
     masked_elements_hex: Vec<String>,
     initiator_doubly_masked_hex: Vec<String>,
+    #[serde(default)]
+    nonce_hex: Option<String>,
+    #[serde(default)]
+    initiator_nonce_hex: Option<String>,
+    #[serde(default)]
+    ttl_secs: Option<u64>,
 }
 
 fn cmd_online_offer(
     input: &std::path::Path,
     session: &str,
     mode: &str,
+    ttl_secs: Option<u64>,
     pad_to: Option<usize>,
     pad_secret: Option<&str>,
     output: Option<&std::path::Path>,
@@ -733,8 +861,9 @@ fn cmd_online_offer(
         _ => return Err(format!("unknown mode: {mode}").into()),
     };
 
-    let secret: [u8; 32] = rand::random();
-    let mut session_obj = InitiatorSession::with_secret(session, fact_set, int_mode, secret)?;
+    let ttl = ttl_secs.unwrap_or(DEFAULT_TTL_SECS);
+    let config = SessionConfig::with_ttl(ttl);
+    let mut session_obj = InitiatorSession::with_config(session, fact_set, int_mode, config)?;
     let offer = session_obj.generate_offer()?;
 
     let final_masked = if let Some(target) = pad_to {
@@ -750,7 +879,16 @@ fn cmd_online_offer(
         offer.masked_elements.clone()
     };
 
-    let message = WireMessage::Offer(MaskedSetOffer::new(session, final_masked));
+    let message = if offer.has_freshness() {
+        WireMessage::Offer(MaskedSetOffer::new_v2(
+            session,
+            final_masked,
+            offer.nonce.unwrap(),
+            offer.deadline().unwrap(),
+        ))
+    } else {
+        WireMessage::Offer(MaskedSetOffer::new(session, final_masked))
+    };
     let json = wire_encode_pretty(&message)?;
 
     match output {
@@ -763,13 +901,19 @@ fn cmd_online_offer(
         mode: mode.to_string(),
         original_count,
         fact_ids_hex: fact_ids.iter().map(hex::encode).collect(),
-        secret_hex: hex::encode(secret),
+        secret_hex: hex::encode([0u8; 32]),
         masked_elements_hex: offer.masked_elements.iter().map(hex::encode).collect(),
+        nonce_hex: Some(session_obj.nonce().to_hex()),
+        ttl_secs: Some(ttl),
     };
     fs::write(state_out, serde_json::to_string_pretty(&state)?)?;
 
     eprintln!("session_id: {session}");
     eprintln!("original_count: {original_count}");
+    if offer.has_freshness() {
+        eprintln!("nonce: {}", session_obj.nonce());
+        eprintln!("ttl_secs: {ttl}");
+    }
     eprintln!("state saved to: {}", state_out.display());
 
     Ok(())
@@ -779,6 +923,7 @@ fn cmd_online_reply(
     input: &std::path::Path,
     offer_path: &std::path::Path,
     mode: &str,
+    ttl_secs: Option<u64>,
     pad_to: Option<usize>,
     pad_secret: Option<&str>,
     output: Option<&std::path::Path>,
@@ -801,9 +946,10 @@ fn cmd_online_reply(
         _ => return Err(format!("unknown mode: {mode}").into()),
     };
 
-    let secret: [u8; 32] = rand::random();
+    let ttl = ttl_secs.unwrap_or(DEFAULT_TTL_SECS);
+    let config = SessionConfig::with_ttl(ttl);
     let mut session_obj =
-        ResponderSession::with_secret(&offer.session_id, fact_set, int_mode, secret)?;
+        ResponderSession::with_config(&offer.session_id, fact_set, int_mode, config)?;
     let reply = session_obj.process_offer_and_reply(&offer)?;
 
     let final_responder_masked = if let Some(target) = pad_to {
@@ -823,11 +969,22 @@ fn cmd_online_reply(
         reply.responder_masked.clone()
     };
 
-    let message = WireMessage::Reply(MaskedSetReply::new(
-        &offer.session_id,
-        final_responder_masked,
-        reply.initiator_doubly_masked.clone(),
-    ));
+    let message = if reply.has_freshness() {
+        WireMessage::Reply(MaskedSetReply::new_v2(
+            &offer.session_id,
+            final_responder_masked,
+            reply.initiator_doubly_masked.clone(),
+            reply.initiator_nonce.unwrap(),
+            reply.responder_nonce.unwrap(),
+            reply.deadline().unwrap(),
+        ))
+    } else {
+        WireMessage::Reply(MaskedSetReply::new(
+            &offer.session_id,
+            final_responder_masked,
+            reply.initiator_doubly_masked.clone(),
+        ))
+    };
     let json = wire_encode_pretty(&message)?;
 
     match output {
@@ -840,18 +997,28 @@ fn cmd_online_reply(
         mode: mode.to_string(),
         original_count,
         fact_ids_hex: fact_ids.iter().map(hex::encode).collect(),
-        secret_hex: hex::encode(secret),
+        secret_hex: hex::encode([0u8; 32]),
         masked_elements_hex: reply.responder_masked.iter().map(hex::encode).collect(),
         initiator_doubly_masked_hex: reply
             .initiator_doubly_masked
             .iter()
             .map(hex::encode)
             .collect(),
+        nonce_hex: Some(session_obj.nonce().to_hex()),
+        initiator_nonce_hex: session_obj.initiator_nonce().map(|n| n.to_hex()),
+        ttl_secs: Some(ttl),
     };
     fs::write(state_out, serde_json::to_string_pretty(&state)?)?;
 
     eprintln!("session_id: {}", offer.session_id);
     eprintln!("original_count: {original_count}");
+    if reply.has_freshness() {
+        eprintln!("responder_nonce: {}", session_obj.nonce());
+        if let Some(init_nonce) = session_obj.initiator_nonce() {
+            eprintln!("initiator_nonce: {}", init_nonce);
+        }
+        eprintln!("ttl_secs: {ttl}");
+    }
     eprintln!("state saved to: {}", state_out.display());
 
     Ok(())
@@ -1024,4 +1191,206 @@ fn load_fact_ids_from_reader<R: BufRead>(
         ids.push(id);
     }
     Ok(ids)
+}
+
+fn cmd_wire_bound_sign(
+    session: &str,
+    offer_path: &std::path::Path,
+    reply_path: &std::path::Path,
+    root_a: &str,
+    root_b: &str,
+    result: &str,
+    mode: &str,
+    key_seed: Option<&str>,
+    output: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let offer_json = fs::read_to_string(offer_path)?;
+    let offer_msg = wire_decode(&offer_json)?;
+    let offer = match offer_msg {
+        WireMessage::Offer(o) => o,
+        _ => return Err("expected offer message".into()),
+    };
+
+    let reply_json = fs::read_to_string(reply_path)?;
+    let reply_msg = wire_decode(&reply_json)?;
+    let reply = match reply_msg {
+        WireMessage::Reply(r) => r,
+        _ => return Err("expected reply message".into()),
+    };
+
+    let initiator_nonce = offer.nonce.unwrap_or_else(SessionNonce::generate);
+    let responder_nonce = reply.responder_nonce.unwrap_or_else(SessionNonce::generate);
+
+    let transcript = TranscriptDigest::compute(
+        session,
+        &initiator_nonce,
+        Some(&responder_nonce),
+        &offer.masked_elements,
+        Some(&reply.responder_masked),
+        Some(&reply.initiator_doubly_masked),
+    );
+
+    let root_a: [u8; 32] = hex::decode(root_a)?
+        .try_into()
+        .map_err(|_| "root_a must be 32 bytes")?;
+    let root_b: [u8; 32] = hex::decode(root_b)?
+        .try_into()
+        .map_err(|_| "root_b must be 32 bytes")?;
+
+    let intersection_mode = match mode {
+        "intersection" => IntersectionMode::Intersection,
+        "cardinality" => IntersectionMode::Cardinality,
+        _ => return Err(format!("unknown mode: {mode}").into()),
+    };
+
+    let psi_result = if intersection_mode == IntersectionMode::Cardinality {
+        let count: usize = result.parse()?;
+        PsiResult::Cardinality { count }
+    } else {
+        let ids = if std::path::Path::new(result).exists() {
+            load_fact_ids(std::path::Path::new(result))?
+        } else {
+            vec![]
+        };
+        let set = FactSet::from_ids(ids.clone());
+        PsiResult::Intersection {
+            ids,
+            root: *set.root(),
+        }
+    };
+
+    let signer = if let Some(seed_hex) = key_seed {
+        let seed: [u8; 32] = hex::decode(seed_hex)?
+            .try_into()
+            .map_err(|_| "key_seed must be 32 bytes")?;
+        ReceiptSigner::from_seed(&seed)
+    } else {
+        ReceiptSigner::new()
+    };
+
+    let receipt = signer.sign_wire_bound(
+        session,
+        transcript,
+        initiator_nonce,
+        responder_nonce,
+        &root_a,
+        &root_b,
+        &psi_result,
+        intersection_mode,
+    );
+
+    let json = serde_json::to_string_pretty(&receipt)?;
+
+    match output {
+        Some(path) => fs::write(path, json)?,
+        None => println!("{json}"),
+    }
+
+    eprintln!("receipt_id: {}", hex::encode(receipt.receipt_id()));
+    eprintln!("transcript_digest: {}", receipt.transcript_digest);
+    eprintln!(
+        "signer_public_key: {}",
+        hex::encode(receipt.signer_public_key)
+    );
+
+    Ok(())
+}
+
+fn cmd_wire_bound_verify(
+    receipt_path: &PathBuf,
+    expect_session: Option<&str>,
+    offer_path: Option<&std::path::Path>,
+    reply_path: Option<&std::path::Path>,
+    expect_root_a: Option<&str>,
+    expect_root_b: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let receipt_json = fs::read_to_string(receipt_path)?;
+    let receipt: WireBoundReceipt = serde_json::from_str(&receipt_json)?;
+
+    let verifier = ReceiptVerifier::new();
+
+    verifier.verify_wire_bound(&receipt)?;
+
+    if let Some(expected_session) = expect_session {
+        if receipt.session_id != expected_session {
+            return Err(format!(
+                "session ID mismatch: expected {}, got {}",
+                expected_session, receipt.session_id
+            )
+            .into());
+        }
+    }
+
+    if let (Some(offer_p), Some(reply_p)) = (offer_path, reply_path) {
+        let offer_json = fs::read_to_string(offer_p)?;
+        let offer_msg = wire_decode(&offer_json)?;
+        let offer = match offer_msg {
+            WireMessage::Offer(o) => o,
+            _ => return Err("expected offer message".into()),
+        };
+
+        let reply_json = fs::read_to_string(reply_p)?;
+        let reply_msg = wire_decode(&reply_json)?;
+        let reply = match reply_msg {
+            WireMessage::Reply(r) => r,
+            _ => return Err("expected reply message".into()),
+        };
+
+        let expected_transcript = TranscriptDigest::compute(
+            &receipt.session_id,
+            &receipt.initiator_nonce,
+            Some(&receipt.responder_nonce),
+            &offer.masked_elements,
+            Some(&reply.responder_masked),
+            Some(&reply.initiator_doubly_masked),
+        );
+
+        if receipt.transcript_digest != expected_transcript {
+            return Err("transcript digest mismatch".into());
+        }
+    }
+
+    if let (Some(a), Some(b)) = (expect_root_a, expect_root_b) {
+        let root_a: [u8; 32] = hex::decode(a)?
+            .try_into()
+            .map_err(|_| "expect_root_a must be 32 bytes")?;
+        let root_b: [u8; 32] = hex::decode(b)?
+            .try_into()
+            .map_err(|_| "expect_root_b must be 32 bytes")?;
+
+        if receipt.set_root_a != root_a {
+            return Err(format!(
+                "root_a mismatch: expected {}, got {}",
+                hex::encode(root_a),
+                hex::encode(receipt.set_root_a)
+            )
+            .into());
+        }
+        if receipt.set_root_b != root_b {
+            return Err(format!(
+                "root_b mismatch: expected {}, got {}",
+                hex::encode(root_b),
+                hex::encode(receipt.set_root_b)
+            )
+            .into());
+        }
+    }
+
+    println!("Wire-bound receipt verification: OK");
+    println!("  version: {}", receipt.version);
+    println!("  session_id: {}", receipt.session_id);
+    println!("  mode: {:?}", receipt.mode);
+    println!("  transcript_digest: {}", receipt.transcript_digest);
+    println!("  initiator_nonce: {}", receipt.initiator_nonce);
+    println!("  responder_nonce: {}", receipt.responder_nonce);
+    println!("  set_root_a: {}", hex::encode(receipt.set_root_a));
+    println!("  set_root_b: {}", hex::encode(receipt.set_root_b));
+    println!(
+        "  result_commitment: {}",
+        hex::encode(receipt.result_commitment)
+    );
+    println!("  signer: {}", hex::encode(receipt.signer_public_key));
+    println!("  receipt_id: {}", hex::encode(receipt.receipt_id()));
+
+    Ok(())
 }
