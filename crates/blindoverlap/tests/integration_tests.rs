@@ -1044,3 +1044,190 @@ fn test_v2_session_with_v1_messages_still_works() {
         _ => panic!("expected intersection"),
     }
 }
+
+// === Identity Tests (v0.4.0) ===
+
+use blindoverlap::{
+    wire_decode_signed, wire_decode_signed_from_peer, wire_encode_signed, PartyIdentity,
+    PublicIdentity, SignedWireMessage,
+};
+
+#[test]
+fn test_signed_message_roundtrip() {
+    let identity = PartyIdentity::generate();
+    let offer = MaskedSetOffer::new("signed-test", vec![[1u8; 32], [2u8; 32]]);
+    let message = WireMessage::Offer(offer);
+
+    let signed = SignedWireMessage::sign(message.clone(), &identity);
+    let json = wire_encode_signed(&signed).unwrap();
+    let decoded = wire_decode_signed(&json).unwrap();
+
+    assert_eq!(decoded.signer_pubkey, identity.public());
+    assert_eq!(decoded.message, message);
+}
+
+#[test]
+fn test_signed_message_bad_signature_rejected() {
+    let identity = PartyIdentity::generate();
+    let offer = MaskedSetOffer::new("test", vec![[1u8; 32]]);
+    let message = WireMessage::Offer(offer);
+
+    let mut signed = SignedWireMessage::sign(message, &identity);
+    signed.signature[0] ^= 0xFF; // Corrupt signature
+
+    let json = wire_encode_signed(&signed).unwrap();
+    let result = wire_decode_signed(&json);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_signed_message_wrong_peer_rejected() {
+    let alice = PartyIdentity::generate();
+    let bob = PartyIdentity::generate();
+
+    let offer = MaskedSetOffer::new("test", vec![[1u8; 32]]);
+    let message = WireMessage::Offer(offer);
+
+    let signed = SignedWireMessage::sign(message, &alice);
+    let json = wire_encode_signed(&signed).unwrap();
+
+    // Alice signed it, but we expect Bob
+    let result = wire_decode_signed_from_peer(&json, &bob.public());
+    assert!(result.is_err());
+
+    // Should work when we expect Alice
+    let result = wire_decode_signed_from_peer(&json, &alice.public());
+    assert!(result.is_ok());
+}
+
+#[test]
+fn test_identity_end_to_end_signed_psi() {
+    let alice_id = PartyIdentity::generate();
+    let bob_id = PartyIdentity::generate();
+
+    let set_a = make_set(&[json!({"x": 1}), json!({"x": 2}), json!({"x": 3})]);
+    let set_b = make_set(&[json!({"x": 2}), json!({"x": 3}), json!({"x": 4})]);
+
+    // Alice initiates with her identity
+    let mut initiator = InitiatorSession::with_channel_binding(
+        "identity-test",
+        set_a.clone(),
+        IntersectionMode::Intersection,
+        &alice_id,
+        bob_id.public(),
+    )
+    .unwrap();
+
+    // Bob responds with his identity
+    let mut responder = ResponderSession::with_channel_binding(
+        "identity-test",
+        set_b.clone(),
+        IntersectionMode::Intersection,
+        &bob_id,
+        alice_id.public(),
+    )
+    .unwrap();
+
+    // Alice creates signed offer
+    let signed_offer = initiator.generate_offer_signed(&alice_id).unwrap();
+    assert_eq!(signed_offer.signer_pubkey, alice_id.public());
+
+    // Bob processes signed offer, creates signed reply
+    let signed_reply = responder
+        .process_offer_and_reply_signed(&signed_offer, &bob_id)
+        .unwrap();
+    assert_eq!(signed_reply.signer_pubkey, bob_id.public());
+    assert!(responder.verified_peer().is_some());
+    assert_eq!(responder.verified_peer().unwrap(), &alice_id.public());
+
+    // Alice processes signed reply
+    let result = initiator.process_reply_signed(&signed_reply).unwrap();
+    assert!(initiator.verified_peer().is_some());
+    assert_eq!(initiator.verified_peer().unwrap(), &bob_id.public());
+
+    match result {
+        PsiResult::Intersection { ids, .. } => {
+            assert_eq!(ids.len(), 2, "should find 2 common elements");
+        }
+        _ => panic!("expected intersection result"),
+    }
+}
+
+#[test]
+fn test_identity_mismatch_rejected() {
+    let alice_id = PartyIdentity::generate();
+    let bob_id = PartyIdentity::generate();
+    let eve_id = PartyIdentity::generate(); // Malicious party
+
+    let set_a = make_set(&[json!({"x": 1})]);
+
+    // Alice initiates expecting Bob
+    let mut initiator = InitiatorSession::with_channel_binding(
+        "mismatch-test",
+        set_a,
+        IntersectionMode::Intersection,
+        &alice_id,
+        bob_id.public(),
+    )
+    .unwrap();
+
+    // Eve impersonates by signing with her own key
+    let eve_signed_reply = SignedWireMessage::sign(
+        WireMessage::Reply(MaskedSetReply::new("mismatch-test", vec![[2u8; 32]], vec![[1u8; 32]])),
+        &eve_id,
+    );
+
+    let _ = initiator.generate_offer().unwrap();
+
+    // Alice rejects Eve's reply because it's not signed by Bob
+    let result = initiator.process_reply_signed(&eve_signed_reply);
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_public_identity_hex_serialization() {
+    let identity = PartyIdentity::generate();
+    let pubkey = identity.public();
+
+    let hex = pubkey.to_hex();
+    let restored = PublicIdentity::from_hex(&hex).unwrap();
+
+    assert_eq!(pubkey, restored);
+}
+
+#[test]
+fn test_unsigned_v2_still_works_without_identity() {
+    let set_a = make_set(&[json!({"x": 1}), json!({"x": 2})]);
+    let set_b = make_set(&[json!({"x": 2}), json!({"x": 3})]);
+
+    // Sessions without identity binding should still work with v2 protocol
+    let config = SessionConfig::with_ttl(300);
+
+    let mut initiator = InitiatorSession::with_config(
+        "no-identity",
+        set_a,
+        IntersectionMode::Intersection,
+        config.clone(),
+    )
+    .unwrap();
+
+    let mut responder = ResponderSession::with_config(
+        "no-identity",
+        set_b,
+        IntersectionMode::Intersection,
+        config,
+    )
+    .unwrap();
+
+    // Use regular (unsigned) message flow
+    let offer = initiator.generate_offer().unwrap();
+    assert!(offer.has_freshness());
+
+    let reply = responder.process_offer_and_reply(&offer).unwrap();
+    let result = initiator.process_reply(&reply).unwrap();
+
+    match result {
+        PsiResult::Intersection { ids, .. } => assert_eq!(ids.len(), 1),
+        _ => panic!("expected intersection"),
+    }
+}
