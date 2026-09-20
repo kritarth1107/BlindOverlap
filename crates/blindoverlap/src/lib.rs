@@ -7,6 +7,7 @@
 
 pub mod fact_id;
 pub mod freshness;
+pub mod identity;
 pub mod padding;
 pub mod protocol;
 pub mod receipt;
@@ -37,6 +38,10 @@ pub use session::{
     InitiatorSession, InitiatorState, ResponderSession, ResponderState, SessionConfig, SessionError,
 };
 pub use wire::{
-    decode as wire_decode, encode as wire_encode, encode_pretty as wire_encode_pretty,
-    IntersectionReveal, MaskedSetOffer, MaskedSetReply, WireError, WireMessage,
+    decode as wire_decode, decode_signed as wire_decode_signed,
+    decode_signed_from_peer as wire_decode_signed_from_peer, encode as wire_encode,
+    encode_pretty as wire_encode_pretty, encode_signed as wire_encode_signed,
+    encode_signed_pretty as wire_encode_signed_pretty, IntersectionReveal, MaskedSetOffer,
+    MaskedSetReply, SignedWireMessage, WireError, WireMessage,
 };
+pub use identity::{IdentityError, PartyIdentity, PublicIdentity, IDENTITY_DOMAIN};
