@@ -330,4 +330,4 @@ Potential improvements (not in scope for v0.3.0):
 
 ---
 
-**Last Updated**: v0.3.0
+**Last Updated**: v0.4.0

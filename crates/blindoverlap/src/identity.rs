@@ -90,8 +90,7 @@ impl PublicIdentity {
     pub fn verify(&self, message: &[u8], signature: &[u8; 64]) -> Result<(), IdentityError> {
         let verifying_key = VerifyingKey::from_bytes(&self.bytes)
             .map_err(|e| IdentityError::InvalidPublicKey(e.to_string()))?;
-        let sig =
-            Signature::from_bytes(signature);
+        let sig = Signature::from_bytes(signature);
 
         let mut domain_msg = Vec::with_capacity(IDENTITY_DOMAIN.len() + message.len());
         domain_msg.extend_from_slice(IDENTITY_DOMAIN);

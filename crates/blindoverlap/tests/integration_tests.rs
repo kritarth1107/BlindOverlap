@@ -1173,7 +1173,11 @@ fn test_identity_mismatch_rejected() {
 
     // Eve impersonates by signing with her own key
     let eve_signed_reply = SignedWireMessage::sign(
-        WireMessage::Reply(MaskedSetReply::new("mismatch-test", vec![[2u8; 32]], vec![[1u8; 32]])),
+        WireMessage::Reply(MaskedSetReply::new(
+            "mismatch-test",
+            vec![[2u8; 32]],
+            vec![[1u8; 32]],
+        )),
         &eve_id,
     );
 
@@ -1211,13 +1215,9 @@ fn test_unsigned_v2_still_works_without_identity() {
     )
     .unwrap();
 
-    let mut responder = ResponderSession::with_config(
-        "no-identity",
-        set_b,
-        IntersectionMode::Intersection,
-        config,
-    )
-    .unwrap();
+    let mut responder =
+        ResponderSession::with_config("no-identity", set_b, IntersectionMode::Intersection, config)
+            .unwrap();
 
     // Use regular (unsigned) message flow
     let offer = initiator.generate_offer().unwrap();

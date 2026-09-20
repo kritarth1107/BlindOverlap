@@ -22,6 +22,7 @@ pub use freshness::{
     current_unix_time, FreshnessError, SessionDeadline, SessionNonce, TranscriptDigest,
     DEFAULT_TTL_SECS,
 };
+pub use identity::{IdentityError, PartyIdentity, PublicIdentity, IDENTITY_DOMAIN};
 pub use padding::{
     generate_dummy_fact_ids, generate_dummy_masked_elements, next_power_of_two, pad_fact_ids,
     pad_masked_elements, strip_padding, PaddingConfig, PaddingError,
@@ -45,4 +46,3 @@ pub use wire::{
     encode_signed_pretty as wire_encode_signed_pretty, IntersectionReveal, MaskedSetOffer,
     MaskedSetReply, SignedWireMessage, WireError, WireMessage,
 };
-pub use identity::{IdentityError, PartyIdentity, PublicIdentity, IDENTITY_DOMAIN};

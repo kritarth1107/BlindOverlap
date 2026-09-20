@@ -36,7 +36,9 @@ use crate::fact_id::{FactId, FactSet};
 use crate::freshness::{FreshnessError, SessionDeadline, SessionNonce, DEFAULT_TTL_SECS};
 use crate::identity::{PartyIdentity, PublicIdentity};
 use crate::protocol::{IntersectionMode, MaskedElement, PsiResult, MAX_SET_SIZE};
-use crate::wire::{IntersectionReveal, MaskedSetOffer, MaskedSetReply, SignedWireMessage, WireMessage};
+use crate::wire::{
+    IntersectionReveal, MaskedSetOffer, MaskedSetReply, SignedWireMessage, WireMessage,
+};
 use std::collections::BTreeSet;
 use thiserror::Error;
 use x25519_dalek::{PublicKey, StaticSecret};
@@ -289,10 +291,7 @@ impl InitiatorSession {
     ) -> Result<Self, SessionError> {
         let config = SessionConfig::with_identity_binding(DEFAULT_TTL_SECS);
         let mut session = Self::with_config(session_id, fact_set, mode, config)?;
-        session.channel_binding = Some(ChannelBinding::new(
-            local_identity.public(),
-            expected_peer,
-        ));
+        session.channel_binding = Some(ChannelBinding::new(local_identity.public(), expected_peer));
         Ok(session)
     }
 
@@ -663,10 +662,7 @@ impl ResponderSession {
     ) -> Result<Self, SessionError> {
         let config = SessionConfig::with_identity_binding(DEFAULT_TTL_SECS);
         let mut session = Self::with_config(session_id, fact_set, mode, config)?;
-        session.channel_binding = Some(ChannelBinding::new(
-            local_identity.public(),
-            expected_peer,
-        ));
+        session.channel_binding = Some(ChannelBinding::new(local_identity.public(), expected_peer));
         Ok(session)
     }
 
