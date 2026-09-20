@@ -512,7 +512,7 @@ impl SignedWireMessage {
         let payload = self.message.signing_payload();
         self.signer_pubkey
             .verify(&payload, &self.signature)
-            .map_err(|e| WireError::Identity(e))
+            .map_err(WireError::Identity)
     }
 
     /// Verify the signature and check the signer matches expected peer.
