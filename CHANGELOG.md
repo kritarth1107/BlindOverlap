@@ -5,6 +5,56 @@ All notable changes to BlindOverlap will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-09-20
+
+### Added
+
+- **Party Identity (`identity` module)**
+  - `PartyIdentity`: Long-lived Ed25519 keypair for signing
+  - `PublicIdentity`: Shareable public key for peer identification
+  - Domain-separated signatures using `BlindOverlap:PartyIdentity:v1` tag
+  - Keypair generation, seed-based creation, hex encoding
+  - File-based keypair persistence (load/save as JSON)
+  - `IdentityError` for typed error handling
+
+- **Signed Wire Messages**
+  - `SignedWireMessage`: Envelope wrapping any wire message with signature
+  - `signer_pubkey` and `signature` fields for channel authentication
+  - `wire_encode_signed()` / `wire_decode_signed()` functions
+  - `wire_decode_signed_from_peer()` for peer verification
+  - v3 protocol tags for signed messages
+  - Backward compatible: unsigned v1/v2 messages still decode
+
+- **Session Channel Binding**
+  - `ChannelBinding`: Binds session to (local_pubkey, peer_pubkey)
+  - `InitiatorSession::with_channel_binding()` constructor
+  - `ResponderSession::with_channel_binding()` constructor
+  - `generate_offer_signed()` / `generate_reveal_signed()` for initiator
+  - `process_offer_and_reply_signed()` / `process_reveal_signed()` for responder
+  - `SessionError::IdentityMismatch`, `BadSignature`, `MissingIdentity`
+  - `verified_peer()` getter to check who signed incoming messages
+
+- **CLI Commands**
+  - `identity-gen`: Generate Ed25519 keypair to JSON file
+  - `identity-show`: Display public key from identity file
+  - `--identity` flag on `online-offer`, `online-reply`, `online-complete`
+  - `--expect-peer` flag for verifying signed messages
+  - Auto-detection of signed vs unsigned messages when decoding
+
+- **Tests**
+  - 7 new integration tests for identity features
+  - Sign/verify roundtrip, bad signature rejection, wrong peer rejection
+  - End-to-end PSI with identities, impersonation rejection
+  - Backward compatibility with unsigned v2 messages
+
+### Security Notes
+
+- **Party identity provides channel authentication only**
+- Does NOT upgrade PSI security from semi-honest to malicious
+- Signatures prevent message swapping/MITM but not protocol deviation
+- Both parties must verify expected peer keys out-of-band
+- See THREAT_MODEL.md for detailed security analysis
+
 ## [0.3.0] - 2026-09-19
 
 ### Added

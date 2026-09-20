@@ -15,7 +15,10 @@ BlindOverlap is an agent-native private set intersection (PSI) library for conte
 - **Set-size padding**: Hide real set cardinality from wire message length analysis (v0.2.0)
 - **Session freshness**: Nonces, TTL, and replay protection primitives (v0.3.0)
 - **Wire-bound receipts**: Receipts bound to specific sessions and transcripts (v0.3.0)
-- **CLI tool**: Encode facts, run intersections, wire encode/decode, online sessions, receipts
+- **Party identity**: Long-lived Ed25519 keypairs for channel authentication (v0.4.0)
+- **Signed wire messages**: Every message signed by sender, verified by recipient (v0.4.0)
+- **Session channel-binding**: Sessions bind to (local_pubkey, peer_pubkey, session_id) (v0.4.0)
+- **CLI tool**: Encode facts, run intersections, wire encode/decode, online sessions, receipts, identity
 
 ## Honest Scope & Limitations
 
@@ -172,6 +175,55 @@ blindoverlap wire-bound-verify \
   --reply reply.json
 ```
 
+### Party Identity (v0.4.0)
+
+```bash
+# Generate identity keypairs for both parties
+blindoverlap identity-gen --output alice_id.json --pubkey-out alice.pub
+blindoverlap identity-gen --output bob_id.json --pubkey-out bob.pub
+
+# Show public key from identity file
+blindoverlap identity-show --identity alice_id.json
+
+# Exchange public keys out-of-band, then run authenticated PSI:
+
+# Party A (initiator): Generate signed offer
+ALICE_PUBKEY=$(cat alice.pub)
+BOB_PUBKEY=$(cat bob.pub)
+
+blindoverlap online-offer \
+  --input set_a.ids \
+  --session "auth-session" \
+  --identity alice_id.json \
+  --expect-peer $BOB_PUBKEY \
+  --state-out a_state.json \
+  --output offer.json
+
+# Party B (responder): Verify offer signature, generate signed reply
+blindoverlap online-reply \
+  --input set_b.ids \
+  --offer offer.json \
+  --identity bob_id.json \
+  --expect-peer $ALICE_PUBKEY \
+  --state-out b_state.json \
+  --output reply.json
+
+# Party A: Verify reply signature, compute intersection
+blindoverlap online-complete \
+  --reply reply.json \
+  --state a_state.json \
+  --expect-peer $BOB_PUBKEY \
+  --with-reveal \
+  --identity alice_id.json \
+  --reveal-out reveal.json
+
+# Party B: Verify reveal signature for bilateral intersection
+blindoverlap online-reveal \
+  --reveal reveal.json \
+  --state b_state.json \
+  --expect-peer $ALICE_PUBKEY
+```
+
 ## Library Usage
 
 ```rust
@@ -220,6 +272,7 @@ let responder_result = responder.process_reveal(&reveal)?;
 | `padding` | Set-size padding with domain-separated PRF (v0.2.0+) |
 | `freshness` | Session nonces, deadlines, transcript digests (v0.3.0) |
 | `replay` | In-memory replay protection store (v0.3.0) |
+| `identity` | Party identity with Ed25519 keypairs (v0.4.0) |
 
 ## CLI Commands
 
@@ -227,16 +280,18 @@ let responder_result = responder.process_reveal(&reveal)?;
 |---------|-------------|
 | `encode` | Convert JSON facts to fact IDs |
 | `canonicalize` | Show RFC 8785 canonical JSON form |
+| `identity-gen` | Generate Ed25519 identity keypair (v0.4.0) |
+| `identity-show` | Display public key from identity file (v0.4.0) |
 | `intersect` | Run PSI between two fact sets (colocated) |
 | `receipt-sign` | Create signed intersection receipt |
 | `receipt-verify` | Verify receipt signature and roots |
 | `card` | Output set cardinality and root |
 | `wire-encode` | Encode wire protocol message |
 | `wire-decode` | Decode and display wire message |
-| `online-offer` | Generate initiator offer with `--ttl-secs` (v0.2.0+) |
-| `online-reply` | Process offer, generate reply with `--ttl-secs` (v0.2.0+) |
-| `online-complete` | Process reply, compute intersection (v0.2.0+) |
-| `online-reveal` | Process reveal for bilateral mode (v0.2.0+) |
+| `online-offer` | Generate initiator offer with `--ttl-secs`, `--identity`, `--expect-peer` |
+| `online-reply` | Process offer, generate reply with identity options |
+| `online-complete` | Process reply, compute intersection with identity options |
+| `online-reveal` | Process reveal for bilateral mode with `--expect-peer` |
 | `wire-bound-sign` | Create session-bound receipt (v0.3.0) |
 | `wire-bound-verify` | Verify wire-bound receipt with transcript (v0.3.0) |
 

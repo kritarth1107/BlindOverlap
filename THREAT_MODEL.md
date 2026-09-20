@@ -144,6 +144,48 @@ The wire protocol introduces additional attack surface:
 - Large messages could cause memory exhaustion
 - The 4096 element limit provides some protection
 
+## Party Identity and Channel Binding (v0.4.0)
+
+BlindOverlap v0.4.0 introduces party identity and signed wire messages for **channel authentication**.
+
+### What Party Identity Provides
+
+✅ Channel authentication:
+- Each party has an Ed25519 keypair (long-lived identity)
+- Wire messages are signed with the sender's private key
+- Recipients verify signatures against expected peer public key
+- Sessions bind to (local_pubkey, peer_pubkey, session_id)
+- MITM swapping messages between sessions is detected
+
+### What Party Identity Does NOT Provide
+
+❌ **Party identity does NOT upgrade PSI security from semi-honest to malicious.**
+
+- A signed message proves the message came from the expected peer
+- It does NOT prove the peer followed the protocol correctly
+- A semi-honest peer can still:
+  - Send fake or crafted elements
+  - Learn elements not in the intersection by protocol deviation
+  - Cause incorrect intersection results
+  
+⚠️ **Channel authentication ≠ Protocol security**
+
+| Threat | Protected? | Notes |
+|--------|-----------|-------|
+| Message swapping between sessions | ✅ Yes | Session binding prevents |
+| MITM inserting messages | ✅ Yes | Signature verification catches |
+| Replay of signed messages | ⚠️ Partial | Nonces help; dedicated replay store needed |
+| Malicious peer deviating from protocol | ❌ No | Still semi-honest model |
+| Peer sending fake/crafted elements | ❌ No | Still semi-honest model |
+
+### Recommended Practices for Identity
+
+- Generate identity keypairs securely and protect private keys
+- Exchange public keys out-of-band before PSI sessions
+- Verify peer identities match expected parties
+- Use channel binding for all production sessions
+- Remember: identity authenticates WHO, not WHAT they compute
+
 ## Session Freshness Limitations (v0.3.0)
 
 BlindOverlap v0.3.0 introduces session freshness primitives for **best-effort** replay protection.
