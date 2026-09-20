@@ -35,7 +35,8 @@ pub use receipt::{
 };
 pub use replay::ReplayStore;
 pub use session::{
-    InitiatorSession, InitiatorState, ResponderSession, ResponderState, SessionConfig, SessionError,
+    ChannelBinding, InitiatorSession, InitiatorState, ResponderSession, ResponderState,
+    SessionConfig, SessionError,
 };
 pub use wire::{
     decode as wire_decode, decode_signed as wire_decode_signed,

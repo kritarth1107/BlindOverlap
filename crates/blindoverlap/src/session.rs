@@ -16,6 +16,16 @@
 //! - **v1 sessions**: No freshness enforcement (backward compatible)
 //! - **v2 sessions**: TTL and nonce validation for replay protection
 //!
+//! # Channel Binding (v0.4.0+)
+//!
+//! Sessions can optionally bind to party identities:
+//! - Local identity: Ed25519 keypair used to sign outgoing messages
+//! - Expected peer: Public key to verify incoming messages came from the expected peer
+//!
+//! Channel binding provides **party authentication only**. It does NOT upgrade PSI
+//! security from semi-honest to malicious. A bound session rejects messages from
+//! unexpected peers but cannot prevent a semi-honest peer from deviating.
+//!
 //! # Security Note
 //!
 //! This is semi-honest secure only. TTL and nonce validation are best-effort
@@ -24,8 +34,9 @@
 
 use crate::fact_id::{FactId, FactSet};
 use crate::freshness::{FreshnessError, SessionDeadline, SessionNonce, DEFAULT_TTL_SECS};
+use crate::identity::{PartyIdentity, PublicIdentity};
 use crate::protocol::{IntersectionMode, MaskedElement, PsiResult, MAX_SET_SIZE};
-use crate::wire::{IntersectionReveal, MaskedSetOffer, MaskedSetReply};
+use crate::wire::{IntersectionReveal, MaskedSetOffer, MaskedSetReply, SignedWireMessage, WireMessage};
 use std::collections::BTreeSet;
 use thiserror::Error;
 use x25519_dalek::{PublicKey, StaticSecret};
@@ -81,6 +92,23 @@ pub enum SessionError {
         /// Message protocol version.
         message_version: u8,
     },
+    /// Peer identity mismatch - message signed by unexpected party.
+    #[error("identity mismatch: expected peer {expected}, got {got}")]
+    IdentityMismatch {
+        /// Expected peer public key (hex).
+        expected: String,
+        /// Actual signer public key (hex).
+        got: String,
+    },
+    /// Signature verification failed.
+    #[error("bad signature: message signature verification failed")]
+    BadSignature,
+    /// Missing identity when channel binding is required.
+    #[error("missing identity: session requires signed messages but none provided")]
+    MissingIdentity,
+    /// Wire error during message processing.
+    #[error("wire error: {0}")]
+    Wire(#[from] crate::wire::WireError),
 }
 
 /// Session state for the initiator (party A).
@@ -111,30 +139,33 @@ fn hash_to_public_key(id: &FactId) -> PublicKey {
     PublicKey::from(&secret)
 }
 
-/// Configuration for session freshness.
-#[derive(Debug, Clone)]
+/// Configuration for session freshness and identity binding.
+#[derive(Debug, Clone, Default)]
 pub struct SessionConfig {
     /// TTL in seconds (default: 300).
     pub ttl_secs: u64,
     /// Whether to use v2 protocol with freshness fields.
     pub use_freshness: bool,
-}
-
-impl Default for SessionConfig {
-    fn default() -> Self {
-        Self {
-            ttl_secs: DEFAULT_TTL_SECS,
-            use_freshness: true,
-        }
-    }
+    /// Whether to require signed messages (channel binding).
+    pub require_signatures: bool,
 }
 
 impl SessionConfig {
+    /// Create a default session config (v2 with freshness, no identity).
+    pub fn new() -> Self {
+        Self {
+            ttl_secs: DEFAULT_TTL_SECS,
+            use_freshness: true,
+            require_signatures: false,
+        }
+    }
+
     /// Create a v1-compatible session (no freshness enforcement).
     pub fn v1_compatible() -> Self {
         Self {
             ttl_secs: DEFAULT_TTL_SECS,
             use_freshness: false,
+            require_signatures: false,
         }
     }
 
@@ -143,6 +174,38 @@ impl SessionConfig {
         Self {
             ttl_secs,
             use_freshness: true,
+            require_signatures: false,
+        }
+    }
+
+    /// Create a session that requires signed messages for channel binding.
+    pub fn with_identity_binding(ttl_secs: u64) -> Self {
+        Self {
+            ttl_secs,
+            use_freshness: true,
+            require_signatures: true,
+        }
+    }
+}
+
+/// Channel binding information for a session.
+///
+/// When set, the session will sign outgoing messages and verify
+/// that incoming messages are signed by the expected peer.
+#[derive(Debug, Clone)]
+pub struct ChannelBinding {
+    /// Local party's public identity (for outbound message verification).
+    pub local_pubkey: PublicIdentity,
+    /// Expected peer's public identity.
+    pub peer_pubkey: PublicIdentity,
+}
+
+impl ChannelBinding {
+    /// Create a new channel binding configuration.
+    pub fn new(local_pubkey: PublicIdentity, peer_pubkey: PublicIdentity) -> Self {
+        Self {
+            local_pubkey,
+            peer_pubkey,
         }
     }
 }
@@ -162,6 +225,8 @@ pub struct InitiatorSession {
     responder_masked: Option<Vec<MaskedElement>>,
     responder_nonce: Option<SessionNonce>,
     our_doubly_masked: Option<Vec<MaskedElement>>,
+    channel_binding: Option<ChannelBinding>,
+    verified_peer: Option<PublicIdentity>,
 }
 
 impl InitiatorSession {
@@ -204,7 +269,31 @@ impl InitiatorSession {
             responder_masked: None,
             responder_nonce: None,
             our_doubly_masked: None,
+            channel_binding: None,
+            verified_peer: None,
         })
+    }
+
+    /// Create a new initiator session with channel binding (identity verification).
+    ///
+    /// When channel binding is set:
+    /// - The session binds to (local_pubkey, peer_pubkey, session_id)
+    /// - Incoming messages must be signed by the expected peer
+    /// - Use `generate_offer_signed()` to produce signed outgoing messages
+    pub fn with_channel_binding(
+        session_id: impl Into<String>,
+        fact_set: FactSet,
+        mode: IntersectionMode,
+        local_identity: &PartyIdentity,
+        expected_peer: PublicIdentity,
+    ) -> Result<Self, SessionError> {
+        let config = SessionConfig::with_identity_binding(DEFAULT_TTL_SECS);
+        let mut session = Self::with_config(session_id, fact_set, mode, config)?;
+        session.channel_binding = Some(ChannelBinding::new(
+            local_identity.public(),
+            expected_peer,
+        ));
+        Ok(session)
     }
 
     /// Create session with a specific secret (for testing).
@@ -238,6 +327,8 @@ impl InitiatorSession {
             responder_masked: None,
             responder_nonce: None,
             our_doubly_masked: None,
+            channel_binding: None,
+            verified_peer: None,
         })
     }
 
@@ -279,6 +370,71 @@ impl InitiatorSession {
     /// Check if this session uses freshness (v2 protocol).
     pub fn uses_freshness(&self) -> bool {
         self.config.use_freshness
+    }
+
+    /// Check if this session has channel binding (identity verification).
+    pub fn has_channel_binding(&self) -> bool {
+        self.channel_binding.is_some()
+    }
+
+    /// Get the channel binding configuration, if set.
+    pub fn channel_binding(&self) -> Option<&ChannelBinding> {
+        self.channel_binding.as_ref()
+    }
+
+    /// Get the verified peer identity (set after successful signature verification).
+    pub fn verified_peer(&self) -> Option<&PublicIdentity> {
+        self.verified_peer.as_ref()
+    }
+
+    /// Generate a signed offer message using the provided identity.
+    ///
+    /// The offer will be signed with the provided identity's private key.
+    /// The peer should verify the signature against our public key.
+    pub fn generate_offer_signed(
+        &mut self,
+        identity: &PartyIdentity,
+    ) -> Result<SignedWireMessage, SessionError> {
+        let offer = self.generate_offer()?;
+        let message = WireMessage::Offer(offer);
+        Ok(SignedWireMessage::sign(message, identity))
+    }
+
+    /// Process a signed reply message with peer verification.
+    ///
+    /// Verifies that the reply is signed by the expected peer before processing.
+    /// Returns an error if signature verification fails or if the signer doesn't
+    /// match the expected peer.
+    pub fn process_reply_signed(
+        &mut self,
+        signed_reply: &SignedWireMessage,
+    ) -> Result<PsiResult, SessionError> {
+        if let Some(binding) = &self.channel_binding {
+            signed_reply
+                .verify_peer(&binding.peer_pubkey)
+                .map_err(|e| match e {
+                    crate::wire::WireError::PeerMismatch { expected, got } => {
+                        SessionError::IdentityMismatch { expected, got }
+                    }
+                    crate::wire::WireError::Identity(_) => SessionError::BadSignature,
+                    other => SessionError::Wire(other),
+                })?;
+            self.verified_peer = Some(signed_reply.signer_pubkey);
+        } else if self.config.require_signatures {
+            return Err(SessionError::MissingIdentity);
+        }
+
+        let reply = match &signed_reply.message {
+            WireMessage::Reply(r) => r,
+            _ => {
+                return Err(SessionError::InvalidState {
+                    expected: "Reply message",
+                    actual: "non-reply message type",
+                })
+            }
+        };
+
+        self.process_reply(reply)
     }
 
     /// Generate the initial offer message.
@@ -421,6 +577,16 @@ impl InitiatorSession {
             Ok(IntersectionReveal::new(&self.session_id, doubly_masked))
         }
     }
+
+    /// Generate a signed reveal message using the provided identity.
+    pub fn generate_reveal_signed(
+        &self,
+        identity: &PartyIdentity,
+    ) -> Result<SignedWireMessage, SessionError> {
+        let reveal = self.generate_reveal()?;
+        let message = WireMessage::Reveal(reveal);
+        Ok(SignedWireMessage::sign(message, identity))
+    }
 }
 
 /// PSI session for the responder (party who receives the initial offer).
@@ -436,6 +602,8 @@ pub struct ResponderSession {
     initiator_nonce: Option<SessionNonce>,
     masked_elements: Option<Vec<MaskedElement>>,
     initiator_doubly_masked: Option<Vec<MaskedElement>>,
+    channel_binding: Option<ChannelBinding>,
+    verified_peer: Option<PublicIdentity>,
 }
 
 impl ResponderSession {
@@ -475,7 +643,31 @@ impl ResponderSession {
             initiator_nonce: None,
             masked_elements: None,
             initiator_doubly_masked: None,
+            channel_binding: None,
+            verified_peer: None,
         })
+    }
+
+    /// Create a new responder session with channel binding (identity verification).
+    ///
+    /// When channel binding is set:
+    /// - The session binds to (local_pubkey, peer_pubkey, session_id)
+    /// - Incoming messages must be signed by the expected peer
+    /// - Use `process_offer_and_reply_signed()` to handle signed messages
+    pub fn with_channel_binding(
+        session_id: impl Into<String>,
+        fact_set: FactSet,
+        mode: IntersectionMode,
+        local_identity: &PartyIdentity,
+        expected_peer: PublicIdentity,
+    ) -> Result<Self, SessionError> {
+        let config = SessionConfig::with_identity_binding(DEFAULT_TTL_SECS);
+        let mut session = Self::with_config(session_id, fact_set, mode, config)?;
+        session.channel_binding = Some(ChannelBinding::new(
+            local_identity.public(),
+            expected_peer,
+        ));
+        Ok(session)
     }
 
     /// Create session with a specific secret (for testing).
@@ -506,6 +698,8 @@ impl ResponderSession {
             initiator_nonce: None,
             masked_elements: None,
             initiator_doubly_masked: None,
+            channel_binding: None,
+            verified_peer: None,
         })
     }
 
@@ -542,6 +736,92 @@ impl ResponderSession {
     /// Check if this session uses freshness (v2 protocol).
     pub fn uses_freshness(&self) -> bool {
         self.config.use_freshness
+    }
+
+    /// Check if this session has channel binding (identity verification).
+    pub fn has_channel_binding(&self) -> bool {
+        self.channel_binding.is_some()
+    }
+
+    /// Get the channel binding configuration, if set.
+    pub fn channel_binding(&self) -> Option<&ChannelBinding> {
+        self.channel_binding.as_ref()
+    }
+
+    /// Get the verified peer identity (set after successful signature verification).
+    pub fn verified_peer(&self) -> Option<&PublicIdentity> {
+        self.verified_peer.as_ref()
+    }
+
+    /// Process a signed offer and generate a signed reply.
+    ///
+    /// Verifies that the offer is signed by the expected peer before processing.
+    /// Returns a signed reply message.
+    pub fn process_offer_and_reply_signed(
+        &mut self,
+        signed_offer: &SignedWireMessage,
+        identity: &PartyIdentity,
+    ) -> Result<SignedWireMessage, SessionError> {
+        if let Some(binding) = &self.channel_binding {
+            signed_offer
+                .verify_peer(&binding.peer_pubkey)
+                .map_err(|e| match e {
+                    crate::wire::WireError::PeerMismatch { expected, got } => {
+                        SessionError::IdentityMismatch { expected, got }
+                    }
+                    crate::wire::WireError::Identity(_) => SessionError::BadSignature,
+                    other => SessionError::Wire(other),
+                })?;
+            self.verified_peer = Some(signed_offer.signer_pubkey);
+        } else if self.config.require_signatures {
+            return Err(SessionError::MissingIdentity);
+        }
+
+        let offer = match &signed_offer.message {
+            WireMessage::Offer(o) => o,
+            _ => {
+                return Err(SessionError::InvalidState {
+                    expected: "Offer message",
+                    actual: "non-offer message type",
+                })
+            }
+        };
+
+        let reply = self.process_offer_and_reply(offer)?;
+        let message = WireMessage::Reply(reply);
+        Ok(SignedWireMessage::sign(message, identity))
+    }
+
+    /// Process a signed reveal with peer verification.
+    pub fn process_reveal_signed(
+        &mut self,
+        signed_reveal: &SignedWireMessage,
+    ) -> Result<PsiResult, SessionError> {
+        if let Some(binding) = &self.channel_binding {
+            signed_reveal
+                .verify_peer(&binding.peer_pubkey)
+                .map_err(|e| match e {
+                    crate::wire::WireError::PeerMismatch { expected, got } => {
+                        SessionError::IdentityMismatch { expected, got }
+                    }
+                    crate::wire::WireError::Identity(_) => SessionError::BadSignature,
+                    other => SessionError::Wire(other),
+                })?;
+        } else if self.config.require_signatures {
+            return Err(SessionError::MissingIdentity);
+        }
+
+        let reveal = match &signed_reveal.message {
+            WireMessage::Reveal(r) => r,
+            _ => {
+                return Err(SessionError::InvalidState {
+                    expected: "Reveal message",
+                    actual: "non-reveal message type",
+                })
+            }
+        };
+
+        self.process_reveal(reveal)
     }
 
     /// Process the offer message and generate the reply.
