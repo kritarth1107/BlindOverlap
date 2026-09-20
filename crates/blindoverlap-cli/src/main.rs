@@ -1069,8 +1069,8 @@ fn cmd_online_reply(
 
     let offer_json = fs::read_to_string(offer_path)?;
 
-    let (offer, verified_signer) = if expect_peer.is_some() {
-        let signed = wire_decode_signed_from_peer(&offer_json, expect_peer.as_ref().unwrap())?;
+    let (offer, verified_signer) = if let Some(peer) = &expect_peer {
+        let signed = wire_decode_signed_from_peer(&offer_json, peer)?;
         let o = match &signed.message {
             WireMessage::Offer(o) => o.clone(),
             _ => return Err("expected offer message".into()),
@@ -1215,8 +1215,8 @@ fn cmd_online_complete(
 
     let reply_json = fs::read_to_string(reply_path)?;
 
-    let (reply, verified_signer) = if expect_peer.is_some() {
-        let signed = wire_decode_signed_from_peer(&reply_json, expect_peer.as_ref().unwrap())?;
+    let (reply, verified_signer) = if let Some(peer) = &expect_peer {
+        let signed = wire_decode_signed_from_peer(&reply_json, peer)?;
         let r = match &signed.message {
             WireMessage::Reply(r) => r.clone(),
             _ => return Err("expected reply message".into()),
@@ -1326,8 +1326,8 @@ fn cmd_online_reveal(
 
     let reveal_json = fs::read_to_string(reveal_path)?;
 
-    let (reveal, verified_signer) = if expect_peer.is_some() {
-        let signed = wire_decode_signed_from_peer(&reveal_json, expect_peer.as_ref().unwrap())?;
+    let (reveal, verified_signer) = if let Some(peer) = &expect_peer {
+        let signed = wire_decode_signed_from_peer(&reveal_json, peer)?;
         let r = match &signed.message {
             WireMessage::Reveal(r) => r.clone(),
             _ => return Err("expected reveal message".into()),
