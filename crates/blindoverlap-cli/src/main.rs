@@ -1,11 +1,12 @@
 //! BlindOverlap CLI - Private set intersection over content-addressed fact IDs.
 
 use blindoverlap::{
-    canonical_json, fact_id_from_str, pad_masked_elements, wire_decode, wire_encode,
-    wire_encode_pretty, FactSet, InitiatorSession, IntersectionMode, IntersectionReceipt,
-    MaskedSetOffer, MaskedSetReply, PaddingConfig, PsiProtocol, PsiResult, ReceiptSigner,
-    ReceiptVerifier, ResponderSession, SessionConfig, SessionNonce, TranscriptDigest,
-    WireBoundReceipt, WireMessage, DEFAULT_TTL_SECS,
+    canonical_json, fact_id_from_str, pad_masked_elements, wire_decode, wire_decode_signed,
+    wire_decode_signed_from_peer, wire_encode, wire_encode_pretty, wire_encode_signed_pretty,
+    FactSet, InitiatorSession, IntersectionMode, IntersectionReceipt, MaskedSetOffer,
+    MaskedSetReply, PaddingConfig, PartyIdentity, PsiProtocol, PsiResult, PublicIdentity,
+    ReceiptSigner, ReceiptVerifier, ResponderSession, SessionConfig, SessionNonce,
+    SignedWireMessage, TranscriptDigest, WireBoundReceipt, WireMessage, DEFAULT_TTL_SECS,
 };
 use clap::{Parser, Subcommand};
 use std::fs;
@@ -44,6 +45,24 @@ enum Commands {
     Canonicalize {
         /// JSON string to canonicalize
         json: String,
+    },
+
+    /// Generate a new party identity (Ed25519 keypair)
+    IdentityGen {
+        /// Output file for identity keypair (JSON format)
+        #[arg(short, long)]
+        output: PathBuf,
+
+        /// Also output just the public key to a separate file
+        #[arg(long)]
+        pubkey_out: Option<PathBuf>,
+    },
+
+    /// Show public key from an identity file
+    IdentityShow {
+        /// Identity file (JSON format)
+        #[arg(short, long)]
+        identity: PathBuf,
     },
 
     /// Run PSI intersection between two fact ID files
@@ -189,6 +208,14 @@ enum Commands {
         /// Output file for session state (required for later steps)
         #[arg(long)]
         state_out: PathBuf,
+
+        /// Identity file for signing messages (enables channel binding)
+        #[arg(long)]
+        identity: Option<PathBuf>,
+
+        /// Expected peer public key (hex, enables channel binding)
+        #[arg(long)]
+        expect_peer: Option<String>,
     },
 
     /// Process offer and generate reply (responder)
@@ -224,6 +251,14 @@ enum Commands {
         /// Output file for session state
         #[arg(long)]
         state_out: PathBuf,
+
+        /// Identity file for signing messages (enables channel binding)
+        #[arg(long)]
+        identity: Option<PathBuf>,
+
+        /// Expected peer public key (hex, enables channel binding)
+        #[arg(long)]
+        expect_peer: Option<String>,
     },
 
     /// Process reply and compute intersection (initiator)
@@ -247,6 +282,14 @@ enum Commands {
         /// Output file for reveal message
         #[arg(long)]
         reveal_out: Option<PathBuf>,
+
+        /// Identity file for signing messages
+        #[arg(long)]
+        identity: Option<PathBuf>,
+
+        /// Expected peer public key (hex, for verifying signed replies)
+        #[arg(long)]
+        expect_peer: Option<String>,
     },
 
     /// Process reveal and compute intersection (responder)
@@ -262,6 +305,10 @@ enum Commands {
         /// Output file for result (default: stdout)
         #[arg(short, long)]
         output: Option<PathBuf>,
+
+        /// Expected peer public key (hex, for verifying signed reveals)
+        #[arg(long)]
+        expect_peer: Option<String>,
     },
 
     /// Sign a wire-bound receipt (binds to session and transcript)
@@ -350,6 +397,12 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
 
         Commands::Canonicalize { json } => cmd_canonicalize(&json)?,
 
+        Commands::IdentityGen { output, pubkey_out } => {
+            cmd_identity_gen(&output, pubkey_out.as_deref())?
+        }
+
+        Commands::IdentityShow { identity } => cmd_identity_show(&identity)?,
+
         Commands::Intersect {
             set_a,
             set_b,
@@ -410,6 +463,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             pad_secret,
             output,
             state_out,
+            identity,
+            expect_peer,
         } => cmd_online_offer(
             &input,
             &session,
@@ -419,6 +474,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             pad_secret.as_deref(),
             output.as_deref(),
             &state_out,
+            identity.as_deref(),
+            expect_peer.as_deref(),
         )?,
 
         Commands::OnlineReply {
@@ -430,6 +487,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             pad_secret,
             output,
             state_out,
+            identity,
+            expect_peer,
         } => cmd_online_reply(
             &input,
             &offer,
@@ -439,6 +498,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             pad_secret.as_deref(),
             output.as_deref(),
             &state_out,
+            identity.as_deref(),
+            expect_peer.as_deref(),
         )?,
 
         Commands::OnlineComplete {
@@ -447,19 +508,24 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             output,
             with_reveal,
             reveal_out,
+            identity,
+            expect_peer,
         } => cmd_online_complete(
             &reply,
             &state,
             output.as_deref(),
             with_reveal,
             reveal_out.as_deref(),
+            identity.as_deref(),
+            expect_peer.as_deref(),
         )?,
 
         Commands::OnlineReveal {
             reveal,
             state,
             output,
-        } => cmd_online_reveal(&reveal, &state, output.as_deref())?,
+            expect_peer,
+        } => cmd_online_reveal(&reveal, &state, output.as_deref(), expect_peer.as_deref())?,
 
         Commands::WireBoundSign {
             session,
@@ -546,6 +612,31 @@ fn cmd_canonicalize(json: &str) -> Result<(), Box<dyn std::error::Error>> {
     let value: serde_json::Value = serde_json::from_str(json)?;
     let canonical = canonical_json(&value);
     println!("{canonical}");
+    Ok(())
+}
+
+fn cmd_identity_gen(
+    output: &std::path::Path,
+    pubkey_out: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let identity = PartyIdentity::generate();
+    identity.save_to_file(output)?;
+
+    let pubkey = identity.public();
+    eprintln!("identity saved to: {}", output.display());
+    eprintln!("public_key: {}", pubkey.to_hex());
+
+    if let Some(pubkey_path) = pubkey_out {
+        fs::write(pubkey_path, pubkey.to_hex())?;
+        eprintln!("public key saved to: {}", pubkey_path.display());
+    }
+
+    Ok(())
+}
+
+fn cmd_identity_show(identity_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    let identity = PartyIdentity::load_from_file(identity_path)?;
+    println!("{}", identity.public().to_hex());
     Ok(())
 }
 
@@ -851,6 +942,8 @@ fn cmd_online_offer(
     pad_secret: Option<&str>,
     output: Option<&std::path::Path>,
     state_out: &std::path::Path,
+    identity_path: Option<&std::path::Path>,
+    expect_peer_hex: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let fact_set = load_fact_set(input)?;
     let fact_ids = fact_set.ids();
@@ -865,6 +958,19 @@ fn cmd_online_offer(
     let ttl = ttl_secs.unwrap_or(DEFAULT_TTL_SECS);
     let config = SessionConfig::with_ttl(ttl);
     let mut session_obj = InitiatorSession::with_config(session, fact_set, int_mode, config)?;
+
+    let identity = if let Some(path) = identity_path {
+        Some(PartyIdentity::load_from_file(path)?)
+    } else {
+        None
+    };
+
+    let expect_peer = if let Some(hex) = expect_peer_hex {
+        Some(PublicIdentity::from_hex(hex)?)
+    } else {
+        None
+    };
+
     let offer = session_obj.generate_offer()?;
 
     let final_masked = if let Some(target) = pad_to {
@@ -890,7 +996,13 @@ fn cmd_online_offer(
     } else {
         WireMessage::Offer(MaskedSetOffer::new(session, final_masked))
     };
-    let json = wire_encode_pretty(&message)?;
+
+    let json = if let Some(ref id) = identity {
+        let signed = SignedWireMessage::sign(message, id);
+        wire_encode_signed_pretty(&signed)?
+    } else {
+        wire_encode_pretty(&message)?
+    };
 
     match output {
         Some(path) => fs::write(path, &json)?,
@@ -915,6 +1027,12 @@ fn cmd_online_offer(
         eprintln!("nonce: {}", session_obj.nonce());
         eprintln!("ttl_secs: {ttl}");
     }
+    if let Some(ref id) = identity {
+        eprintln!("signed by: {}", id.public().to_hex());
+    }
+    if let Some(ref peer) = expect_peer {
+        eprintln!("expect_peer: {}", peer.to_hex());
+    }
     eprintln!("state saved to: {}", state_out.display());
 
     Ok(())
@@ -930,16 +1048,47 @@ fn cmd_online_reply(
     pad_secret: Option<&str>,
     output: Option<&std::path::Path>,
     state_out: &std::path::Path,
+    identity_path: Option<&std::path::Path>,
+    expect_peer_hex: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let fact_set = load_fact_set(input)?;
     let fact_ids = fact_set.ids();
     let original_count = fact_ids.len();
 
+    let identity = if let Some(path) = identity_path {
+        Some(PartyIdentity::load_from_file(path)?)
+    } else {
+        None
+    };
+
+    let expect_peer = if let Some(hex) = expect_peer_hex {
+        Some(PublicIdentity::from_hex(hex)?)
+    } else {
+        None
+    };
+
     let offer_json = fs::read_to_string(offer_path)?;
-    let offer_msg = wire_decode(&offer_json)?;
-    let offer = match offer_msg {
-        WireMessage::Offer(o) => o,
-        _ => return Err("expected offer message".into()),
+
+    let (offer, verified_signer) = if expect_peer.is_some() {
+        let signed = wire_decode_signed_from_peer(&offer_json, expect_peer.as_ref().unwrap())?;
+        let o = match &signed.message {
+            WireMessage::Offer(o) => o.clone(),
+            _ => return Err("expected offer message".into()),
+        };
+        (o, Some(signed.signer_pubkey))
+    } else if let Ok(signed) = wire_decode_signed(&offer_json) {
+        let o = match &signed.message {
+            WireMessage::Offer(o) => o.clone(),
+            _ => return Err("expected offer message".into()),
+        };
+        (o, Some(signed.signer_pubkey))
+    } else {
+        let offer_msg = wire_decode(&offer_json)?;
+        let o = match offer_msg {
+            WireMessage::Offer(o) => o,
+            _ => return Err("expected offer message".into()),
+        };
+        (o, None)
     };
 
     let int_mode = match mode {
@@ -987,11 +1136,24 @@ fn cmd_online_reply(
             reply.initiator_doubly_masked.clone(),
         ))
     };
-    let json = wire_encode_pretty(&message)?;
+
+    let json = if let Some(ref id) = identity {
+        let signed = SignedWireMessage::sign(message, id);
+        wire_encode_signed_pretty(&signed)?
+    } else {
+        wire_encode_pretty(&message)?
+    };
 
     match output {
         Some(path) => fs::write(path, &json)?,
         None => println!("{json}"),
+    }
+
+    if let Some(signer) = verified_signer {
+        eprintln!("verified signer: {}", signer.to_hex());
+    }
+    if let Some(ref id) = identity {
+        eprintln!("signed by: {}", id.public().to_hex());
     }
 
     let state = ResponderState {
@@ -1026,21 +1188,53 @@ fn cmd_online_reply(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn cmd_online_complete(
     reply_path: &std::path::Path,
     state_path: &std::path::Path,
     output: Option<&std::path::Path>,
     with_reveal: bool,
     reveal_out: Option<&std::path::Path>,
+    identity_path: Option<&std::path::Path>,
+    expect_peer_hex: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let state_json = fs::read_to_string(state_path)?;
     let state: InitiatorState = serde_json::from_str(&state_json)?;
 
+    let identity = if let Some(path) = identity_path {
+        Some(PartyIdentity::load_from_file(path)?)
+    } else {
+        None
+    };
+
+    let expect_peer = if let Some(hex) = expect_peer_hex {
+        Some(PublicIdentity::from_hex(hex)?)
+    } else {
+        None
+    };
+
     let reply_json = fs::read_to_string(reply_path)?;
-    let reply_msg = wire_decode(&reply_json)?;
-    let reply = match reply_msg {
-        WireMessage::Reply(r) => r,
-        _ => return Err("expected reply message".into()),
+
+    let (reply, verified_signer) = if expect_peer.is_some() {
+        let signed = wire_decode_signed_from_peer(&reply_json, expect_peer.as_ref().unwrap())?;
+        let r = match &signed.message {
+            WireMessage::Reply(r) => r.clone(),
+            _ => return Err("expected reply message".into()),
+        };
+        (r, Some(signed.signer_pubkey))
+    } else if let Ok(signed) = wire_decode_signed(&reply_json) {
+        let r = match &signed.message {
+            WireMessage::Reply(r) => r.clone(),
+            _ => return Err("expected reply message".into()),
+        };
+        (r, Some(signed.signer_pubkey))
+    } else {
+        let reply_msg = wire_decode(&reply_json)?;
+        let r = match reply_msg {
+            WireMessage::Reply(r) => r,
+            _ => return Err("expected reply message".into()),
+        };
+        (r, None)
     };
 
     let int_mode = match state.mode.as_str() {
@@ -1069,6 +1263,10 @@ fn cmd_online_complete(
     let _ = session_obj.generate_offer()?;
     let result = session_obj.process_reply(&reply)?;
 
+    if let Some(signer) = verified_signer {
+        eprintln!("verified signer: {}", signer.to_hex());
+    }
+
     let mut out: Box<dyn Write> = match output {
         Some(path) => Box::new(fs::File::create(path)?),
         None => Box::new(io::stdout()),
@@ -1090,11 +1288,21 @@ fn cmd_online_complete(
     if with_reveal {
         let reveal = session_obj.generate_reveal()?;
         let reveal_msg = WireMessage::Reveal(reveal);
-        let reveal_json = wire_encode_pretty(&reveal_msg)?;
+
+        let reveal_json = if let Some(ref id) = identity {
+            let signed = SignedWireMessage::sign(reveal_msg, id);
+            wire_encode_signed_pretty(&signed)?
+        } else {
+            wire_encode_pretty(&reveal_msg)?
+        };
 
         match reveal_out {
             Some(path) => fs::write(path, &reveal_json)?,
             None => eprintln!("\n--- Reveal Message ---\n{reveal_json}"),
+        }
+
+        if let Some(ref id) = identity {
+            eprintln!("reveal signed by: {}", id.public().to_hex());
         }
     }
 
@@ -1105,15 +1313,39 @@ fn cmd_online_reveal(
     reveal_path: &std::path::Path,
     state_path: &std::path::Path,
     output: Option<&std::path::Path>,
+    expect_peer_hex: Option<&str>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let state_json = fs::read_to_string(state_path)?;
     let state: ResponderState = serde_json::from_str(&state_json)?;
 
+    let expect_peer = if let Some(hex) = expect_peer_hex {
+        Some(PublicIdentity::from_hex(hex)?)
+    } else {
+        None
+    };
+
     let reveal_json = fs::read_to_string(reveal_path)?;
-    let reveal_msg = wire_decode(&reveal_json)?;
-    let reveal = match reveal_msg {
-        WireMessage::Reveal(r) => r,
-        _ => return Err("expected reveal message".into()),
+
+    let (reveal, verified_signer) = if expect_peer.is_some() {
+        let signed = wire_decode_signed_from_peer(&reveal_json, expect_peer.as_ref().unwrap())?;
+        let r = match &signed.message {
+            WireMessage::Reveal(r) => r.clone(),
+            _ => return Err("expected reveal message".into()),
+        };
+        (r, Some(signed.signer_pubkey))
+    } else if let Ok(signed) = wire_decode_signed(&reveal_json) {
+        let r = match &signed.message {
+            WireMessage::Reveal(r) => r.clone(),
+            _ => return Err("expected reveal message".into()),
+        };
+        (r, Some(signed.signer_pubkey))
+    } else {
+        let reveal_msg = wire_decode(&reveal_json)?;
+        let r = match reveal_msg {
+            WireMessage::Reveal(r) => r,
+            _ => return Err("expected reveal message".into()),
+        };
+        (r, None)
     };
 
     let int_mode = match state.mode.as_str() {
@@ -1146,6 +1378,10 @@ fn cmd_online_reveal(
 
     let _ = session_obj.process_offer_and_reply(&offer);
     let result = session_obj.process_reveal(&reveal)?;
+
+    if let Some(signer) = verified_signer {
+        eprintln!("verified signer: {}", signer.to_hex());
+    }
 
     let mut out: Box<dyn Write> = match output {
         Some(path) => Box::new(fs::File::create(path)?),
