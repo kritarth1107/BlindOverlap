@@ -7,8 +7,8 @@
 
 pub mod fact_id;
 pub mod freshness;
-pub mod invite;
 pub mod identity;
+pub mod invite;
 pub mod padding;
 pub mod protocol;
 pub mod receipt;

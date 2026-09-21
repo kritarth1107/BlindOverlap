@@ -97,7 +97,7 @@ pub enum InviteError {
 }
 
 /// Allowed intersection modes for a session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AllowedMode {
     /// Only intersection mode is allowed.
@@ -105,6 +105,7 @@ pub enum AllowedMode {
     /// Only cardinality mode is allowed.
     Cardinality,
     /// Either mode is allowed.
+    #[default]
     Any,
 }
 
@@ -116,12 +117,6 @@ impl AllowedMode {
             AllowedMode::Cardinality => mode == IntersectionMode::Cardinality,
             AllowedMode::Any => true,
         }
-    }
-}
-
-impl Default for AllowedMode {
-    fn default() -> Self {
-        AllowedMode::Any
     }
 }
 
@@ -200,7 +195,13 @@ impl InviteTicket {
         peer_pubkey: Option<PublicIdentity>,
         allowed_mode: AllowedMode,
     ) -> Self {
-        Self::issue(issuer, session_id, peer_pubkey, allowed_mode, DEFAULT_TICKET_TTL_SECS)
+        Self::issue(
+            issuer,
+            session_id,
+            peer_pubkey,
+            allowed_mode,
+            DEFAULT_TICKET_TTL_SECS,
+        )
     }
 
     /// Verify the ticket's signature and check it hasn't expired.
@@ -334,7 +335,7 @@ impl InviteTicket {
     /// Compute the ticket ID (hash of signature).
     pub fn ticket_id(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
-        hasher.update(&self.signature);
+        hasher.update(self.signature);
         hasher.finalize().into()
     }
 
@@ -427,12 +428,7 @@ mod tests {
     #[test]
     fn test_issue_and_verify() {
         let issuer = PartyIdentity::generate();
-        let ticket = InviteTicket::issue_default(
-            &issuer,
-            "test-session",
-            None,
-            AllowedMode::Any,
-        );
+        let ticket = InviteTicket::issue_default(&issuer, "test-session", None, AllowedMode::Any);
 
         assert!(ticket.verify().is_ok());
         assert!(!ticket.is_expired());
@@ -443,12 +439,7 @@ mod tests {
         let issuer = PartyIdentity::generate();
         let other = PartyIdentity::generate();
 
-        let ticket = InviteTicket::issue_default(
-            &issuer,
-            "test-session",
-            None,
-            AllowedMode::Any,
-        );
+        let ticket = InviteTicket::issue_default(&issuer, "test-session", None, AllowedMode::Any);
 
         assert!(ticket.verify_issuer(&issuer.public()).is_ok());
         assert!(ticket.verify_issuer(&other.public()).is_err());
@@ -477,12 +468,7 @@ mod tests {
         let peer1 = PartyIdentity::generate();
         let peer2 = PartyIdentity::generate();
 
-        let ticket = InviteTicket::issue_default(
-            &issuer,
-            "test-session",
-            None,
-            AllowedMode::Any,
-        );
+        let ticket = InviteTicket::issue_default(&issuer, "test-session", None, AllowedMode::Any);
 
         assert!(ticket.verify_for_peer(&peer1.public()).is_ok());
         assert!(ticket.verify_for_peer(&peer2.public()).is_ok());
@@ -492,49 +478,47 @@ mod tests {
     fn test_mode_restriction() {
         let issuer = PartyIdentity::generate();
 
-        let intersection_only = InviteTicket::issue_default(
-            &issuer,
-            "test-session",
-            None,
-            AllowedMode::Intersection,
-        );
+        let intersection_only =
+            InviteTicket::issue_default(&issuer, "test-session", None, AllowedMode::Intersection);
 
-        assert!(intersection_only.verify_for_session("test-session", IntersectionMode::Intersection).is_ok());
-        assert!(intersection_only.verify_for_session("test-session", IntersectionMode::Cardinality).is_err());
+        assert!(intersection_only
+            .verify_for_session("test-session", IntersectionMode::Intersection)
+            .is_ok());
+        assert!(intersection_only
+            .verify_for_session("test-session", IntersectionMode::Cardinality)
+            .is_err());
 
-        let cardinality_only = InviteTicket::issue_default(
-            &issuer,
-            "test-session",
-            None,
-            AllowedMode::Cardinality,
-        );
+        let cardinality_only =
+            InviteTicket::issue_default(&issuer, "test-session", None, AllowedMode::Cardinality);
 
-        assert!(cardinality_only.verify_for_session("test-session", IntersectionMode::Cardinality).is_ok());
-        assert!(cardinality_only.verify_for_session("test-session", IntersectionMode::Intersection).is_err());
+        assert!(cardinality_only
+            .verify_for_session("test-session", IntersectionMode::Cardinality)
+            .is_ok());
+        assert!(cardinality_only
+            .verify_for_session("test-session", IntersectionMode::Intersection)
+            .is_err());
 
-        let any_mode = InviteTicket::issue_default(
-            &issuer,
-            "test-session",
-            None,
-            AllowedMode::Any,
-        );
+        let any_mode = InviteTicket::issue_default(&issuer, "test-session", None, AllowedMode::Any);
 
-        assert!(any_mode.verify_for_session("test-session", IntersectionMode::Intersection).is_ok());
-        assert!(any_mode.verify_for_session("test-session", IntersectionMode::Cardinality).is_ok());
+        assert!(any_mode
+            .verify_for_session("test-session", IntersectionMode::Intersection)
+            .is_ok());
+        assert!(any_mode
+            .verify_for_session("test-session", IntersectionMode::Cardinality)
+            .is_ok());
     }
 
     #[test]
     fn test_session_mismatch() {
         let issuer = PartyIdentity::generate();
-        let ticket = InviteTicket::issue_default(
-            &issuer,
-            "session-1",
-            None,
-            AllowedMode::Any,
-        );
+        let ticket = InviteTicket::issue_default(&issuer, "session-1", None, AllowedMode::Any);
 
-        assert!(ticket.verify_for_session("session-1", IntersectionMode::Intersection).is_ok());
-        assert!(ticket.verify_for_session("session-2", IntersectionMode::Intersection).is_err());
+        assert!(ticket
+            .verify_for_session("session-1", IntersectionMode::Intersection)
+            .is_ok());
+        assert!(ticket
+            .verify_for_session("session-2", IntersectionMode::Intersection)
+            .is_err());
     }
 
     #[test]
@@ -547,8 +531,8 @@ mod tests {
             &issuer.public(),
             None,
             AllowedMode::Any,
-            1000,  // issued in the past
-            1001,  // expired in the past
+            1000, // issued in the past
+            1001, // expired in the past
         );
         let signature = issuer.sign(&payload);
 
@@ -590,12 +574,8 @@ mod tests {
     #[test]
     fn test_tampered_signature_rejected() {
         let issuer = PartyIdentity::generate();
-        let mut ticket = InviteTicket::issue_default(
-            &issuer,
-            "test-session",
-            None,
-            AllowedMode::Any,
-        );
+        let mut ticket =
+            InviteTicket::issue_default(&issuer, "test-session", None, AllowedMode::Any);
 
         ticket.signature[0] ^= 0xFF;
 
@@ -624,45 +604,55 @@ mod tests {
             AllowedMode::Intersection,
         );
 
-        assert!(ticket.verify_full(
-            &issuer.public(),
-            &peer.public(),
-            "full-test",
-            IntersectionMode::Intersection
-        ).is_ok());
+        assert!(ticket
+            .verify_full(
+                &issuer.public(),
+                &peer.public(),
+                "full-test",
+                IntersectionMode::Intersection
+            )
+            .is_ok());
 
         // Wrong issuer
         let wrong_issuer = PartyIdentity::generate();
-        assert!(ticket.verify_full(
-            &wrong_issuer.public(),
-            &peer.public(),
-            "full-test",
-            IntersectionMode::Intersection
-        ).is_err());
+        assert!(ticket
+            .verify_full(
+                &wrong_issuer.public(),
+                &peer.public(),
+                "full-test",
+                IntersectionMode::Intersection
+            )
+            .is_err());
 
         // Wrong peer
         let wrong_peer = PartyIdentity::generate();
-        assert!(ticket.verify_full(
-            &issuer.public(),
-            &wrong_peer.public(),
-            "full-test",
-            IntersectionMode::Intersection
-        ).is_err());
+        assert!(ticket
+            .verify_full(
+                &issuer.public(),
+                &wrong_peer.public(),
+                "full-test",
+                IntersectionMode::Intersection
+            )
+            .is_err());
 
         // Wrong session
-        assert!(ticket.verify_full(
-            &issuer.public(),
-            &peer.public(),
-            "wrong-session",
-            IntersectionMode::Intersection
-        ).is_err());
+        assert!(ticket
+            .verify_full(
+                &issuer.public(),
+                &peer.public(),
+                "wrong-session",
+                IntersectionMode::Intersection
+            )
+            .is_err());
 
         // Wrong mode
-        assert!(ticket.verify_full(
-            &issuer.public(),
-            &peer.public(),
-            "full-test",
-            IntersectionMode::Cardinality
-        ).is_err());
+        assert!(ticket
+            .verify_full(
+                &issuer.public(),
+                &peer.public(),
+                "full-test",
+                IntersectionMode::Cardinality
+            )
+            .is_err());
     }
 }

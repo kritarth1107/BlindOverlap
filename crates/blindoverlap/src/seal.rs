@@ -429,7 +429,7 @@ impl SealedSessionRecord {
     /// Compute the record ID (hash of body_digest).
     pub fn record_id(&self) -> [u8; 32] {
         let mut hasher = Sha256::new();
-        hasher.update(&self.body_digest);
+        hasher.update(self.body_digest);
         hasher.finalize().into()
     }
 
@@ -505,10 +505,7 @@ fn compute_transcript_digest(
 
     // Extract masked elements from message hashes for transcript computation
     // This is a simplified version; in practice we'd use actual wire data
-    let dummy_elements: Vec<MaskedElement> = messages
-        .iter()
-        .map(|m| m.message_hash)
-        .collect();
+    let dummy_elements: Vec<MaskedElement> = messages.iter().map(|m| m.message_hash).collect();
 
     Some(TranscriptDigest::compute(
         session_id,
@@ -520,6 +517,7 @@ fn compute_transcript_digest(
     ))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compute_body_digest(
     session_id: &str,
     protocol_version: u8,
@@ -534,36 +532,36 @@ fn compute_body_digest(
 
     hasher.update(SEALED_RECORD_DOMAIN);
     hasher.update(session_id.as_bytes());
-    hasher.update(&[protocol_version]);
-    hasher.update(&[status_byte(status)]);
-    hasher.update(&started_at.to_le_bytes());
+    hasher.update([protocol_version]);
+    hasher.update([status_byte(status)]);
+    hasher.update(started_at.to_le_bytes());
 
     if let Some(pk) = local_pubkey {
-        hasher.update(&[1]);
+        hasher.update([1]);
         hasher.update(pk.as_bytes());
     } else {
-        hasher.update(&[0]);
+        hasher.update([0]);
     }
 
     if let Some(pk) = peer_pubkey {
-        hasher.update(&[1]);
+        hasher.update([1]);
         hasher.update(pk.as_bytes());
     } else {
-        hasher.update(&[0]);
+        hasher.update([0]);
     }
 
-    hasher.update(&(messages.len() as u32).to_le_bytes());
+    hasher.update((messages.len() as u32).to_le_bytes());
     for msg in messages {
-        hasher.update(&msg.sequence.to_le_bytes());
-        hasher.update(&[direction_byte(msg.direction)]);
-        hasher.update(&msg.message_hash);
+        hasher.update(msg.sequence.to_le_bytes());
+        hasher.update([direction_byte(msg.direction)]);
+        hasher.update(msg.message_hash);
     }
 
     if let Some(td) = transcript_digest {
-        hasher.update(&[1]);
+        hasher.update([1]);
         hasher.update(td.as_bytes());
     } else {
-        hasher.update(&[0]);
+        hasher.update([0]);
     }
 
     hasher.finalize().into()

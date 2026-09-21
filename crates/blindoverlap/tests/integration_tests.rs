@@ -1246,12 +1246,7 @@ use tempfile::NamedTempFile;
 fn test_invite_issue_verify_roundtrip() {
     let issuer = PartyIdentity::generate();
 
-    let ticket = InviteTicket::issue_default(
-        &issuer,
-        "test-session",
-        None,
-        AllowedMode::Any,
-    );
+    let ticket = InviteTicket::issue_default(&issuer, "test-session", None, AllowedMode::Any);
 
     assert!(ticket.verify().is_ok());
     assert!(ticket.verify_issuer(&issuer.public()).is_ok());
@@ -1282,15 +1277,15 @@ fn test_invite_peer_binding() {
 fn test_invite_mode_restriction() {
     let issuer = PartyIdentity::generate();
 
-    let intersection_only = InviteTicket::issue_default(
-        &issuer,
-        "mode-test",
-        None,
-        AllowedMode::Intersection,
-    );
+    let intersection_only =
+        InviteTicket::issue_default(&issuer, "mode-test", None, AllowedMode::Intersection);
 
-    assert!(intersection_only.verify_for_session("mode-test", IntersectionMode::Intersection).is_ok());
-    assert!(intersection_only.verify_for_session("mode-test", IntersectionMode::Cardinality).is_err());
+    assert!(intersection_only
+        .verify_for_session("mode-test", IntersectionMode::Intersection)
+        .is_ok());
+    assert!(intersection_only
+        .verify_for_session("mode-test", IntersectionMode::Cardinality)
+        .is_err());
 }
 
 #[test]
@@ -1341,7 +1336,10 @@ fn test_invite_tampered_signature_rejected() {
     let mut ticket = InviteTicket::issue_default(&issuer, "tamper-test", None, AllowedMode::Any);
     ticket.signature[0] ^= 0xFF;
 
-    assert!(matches!(ticket.verify(), Err(InviteError::InvalidSignature)));
+    assert!(matches!(
+        ticket.verify(),
+        Err(InviteError::InvalidSignature)
+    ));
 }
 
 // === Sealed Session Record Tests ===
@@ -1493,13 +1491,9 @@ fn test_session_from_invite_initiator() {
     let set = make_set(&[json!({"x": 1}), json!({"x": 2})]);
 
     // Responder uses the ticket to create session
-    let session = ResponderSession::from_invite(
-        &ticket,
-        set,
-        IntersectionMode::Intersection,
-        &responder_id,
-    )
-    .unwrap();
+    let session =
+        ResponderSession::from_invite(&ticket, set, IntersectionMode::Intersection, &responder_id)
+            .unwrap();
 
     assert_eq!(session.session_id(), "invite-session");
     assert!(session.has_channel_binding());
@@ -1521,12 +1515,8 @@ fn test_session_from_invite_wrong_peer_rejected() {
     let set = make_set(&[json!({"x": 1})]);
 
     // Wrong peer tries to use the ticket
-    let result = ResponderSession::from_invite(
-        &ticket,
-        set,
-        IntersectionMode::Intersection,
-        &wrong_peer,
-    );
+    let result =
+        ResponderSession::from_invite(&ticket, set, IntersectionMode::Intersection, &wrong_peer);
 
     assert!(result.is_err());
 }
@@ -1589,13 +1579,9 @@ fn test_end_to_end_invite_signed_psi_export() {
 
     // Bob (the invitee) creates responder session from the invite
     // from_invite verifies the ticket and sets issuer (Alice) as expected peer
-    let mut responder = ResponderSession::from_invite(
-        &ticket,
-        set_b,
-        IntersectionMode::Intersection,
-        &bob,
-    )
-    .unwrap();
+    let mut responder =
+        ResponderSession::from_invite(&ticket, set_b, IntersectionMode::Intersection, &bob)
+            .unwrap();
 
     // Run signed PSI protocol
     let signed_offer = initiator.generate_offer_signed(&alice).unwrap();

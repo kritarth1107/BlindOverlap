@@ -3,11 +3,11 @@
 use blindoverlap::{
     canonical_json, fact_id_from_str, pad_masked_elements, wire_decode, wire_decode_signed,
     wire_decode_signed_from_peer, wire_encode, wire_encode_pretty, wire_encode_signed_pretty,
-    AllowedMode, FactSet, InitiatorSession, IntersectionMode, IntersectionReceipt,
-    InviteTicket, MaskedSetOffer, MaskedSetReply, MessageDirection, PaddingConfig,
-    PartyIdentity, PsiProtocol, PsiResult, PublicIdentity, ReceiptSigner, ReceiptVerifier,
-    ResponderSession, SealedSessionRecord, SessionConfig, SessionNonce, SessionStatus,
-    SignedWireMessage, TranscriptDigest, WireBoundReceipt, WireMessage, DEFAULT_TTL_SECS,
+    AllowedMode, FactSet, InitiatorSession, IntersectionMode, IntersectionReceipt, InviteTicket,
+    MaskedSetOffer, MaskedSetReply, MessageDirection, PaddingConfig, PartyIdentity, PsiProtocol,
+    PsiResult, PublicIdentity, ReceiptSigner, ReceiptVerifier, ResponderSession,
+    SealedSessionRecord, SessionConfig, SessionNonce, SessionStatus, SignedWireMessage,
+    TranscriptDigest, WireBoundReceipt, WireMessage, DEFAULT_TTL_SECS,
 };
 use clap::{Parser, Subcommand};
 use std::fs;
@@ -1924,7 +1924,10 @@ fn cmd_session_export(
             builder = builder.initiator_nonce(nonce);
         }
     }
-    if let Some(nonce_hex) = state_value.get("initiator_nonce_hex").and_then(|v| v.as_str()) {
+    if let Some(nonce_hex) = state_value
+        .get("initiator_nonce_hex")
+        .and_then(|v| v.as_str())
+    {
         if let Ok(nonce) = SessionNonce::from_hex(nonce_hex) {
             builder = builder.responder_nonce(nonce);
         }
