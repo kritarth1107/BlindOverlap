@@ -13,6 +13,7 @@ pub mod padding;
 pub mod protocol;
 pub mod receipt;
 pub mod replay;
+pub mod seal;
 pub mod session;
 pub mod wire;
 
@@ -39,6 +40,10 @@ pub use receipt::{
     WireBoundReceipt,
 };
 pub use replay::ReplayStore;
+pub use seal::{
+    MessageDirection, RecordSeal, SealError, SealedSessionBuilder, SealedSessionRecord,
+    SessionStatus, WireMessageEntry, SEALED_RECORD_DOMAIN,
+};
 pub use session::{
     ChannelBinding, InitiatorSession, InitiatorState, ResponderSession, ResponderState,
     SessionConfig, SessionError,
