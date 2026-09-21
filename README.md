@@ -18,7 +18,10 @@ BlindOverlap is an agent-native private set intersection (PSI) library for conte
 - **Party identity**: Long-lived Ed25519 keypairs for channel authentication (v0.4.0)
 - **Signed wire messages**: Every message signed by sender, verified by recipient (v0.4.0)
 - **Session channel-binding**: Sessions bind to (local_pubkey, peer_pubkey, session_id) (v0.4.0)
-- **CLI tool**: Encode facts, run intersections, wire encode/decode, online sessions, receipts, identity
+- **Invite tickets**: Short-lived signed capabilities for session bootstrapping (v0.5.0)
+- **Sealed session export**: Auditable JSON export of completed sessions (v0.5.0)
+- **Persistent replay store**: File-backed replay protection that survives restart (v0.5.0)
+- **CLI tool**: Encode facts, run intersections, wire encode/decode, online sessions, receipts, identity, invites
 
 ## Honest Scope & Limitations
 
@@ -30,10 +33,12 @@ BlindOverlap is an agent-native private set intersection (PSI) library for conte
 | Cardinality mode | ⚠️ Leaks intersection size |
 | Padding | ⚠️ Best-effort size hiding (semi-honest only) |
 | Freshness | ⚠️ Best-effort TTL/replay (semi-honest only) |
+| Invite tickets | ⚠️ Authenticates WHO, not protocol compliance |
+| Sealed records | ⚠️ Audit aid only, not security guarantee |
 | Scale | **Toy scale**: ≤4,096 IDs per set, 32 bytes each |
 | Production readiness | ❌ **NOT production ready** — for experimentation only |
 
-> **Warning**: This is a v0.3.0 release intended for experimentation and learning. Do not use in production systems where security is critical. See [THREAT_MODEL.md](THREAT_MODEL.md) for details.
+> **Warning**: This is a v0.5.0 release intended for experimentation and learning. Do not use in production systems where security is critical. See [THREAT_MODEL.md](THREAT_MODEL.md) for details.
 
 ## Quick Start
 
@@ -175,6 +180,49 @@ blindoverlap wire-bound-verify \
   --reply reply.json
 ```
 
+### Invite Tickets (v0.5.0)
+
+```bash
+# Alice issues an invite for Bob to join a specific session
+ALICE_PUBKEY=$(cat alice.pub)
+BOB_PUBKEY=$(cat bob.pub)
+
+blindoverlap invite-create \
+  --session "secure-session" \
+  --identity alice_id.json \
+  --peer $BOB_PUBKEY \
+  --mode intersection \
+  --ttl-secs 300 \
+  --output invite.json
+
+# Bob verifies the invite before using it
+blindoverlap invite-verify \
+  --ticket invite.json \
+  --expect-issuer $ALICE_PUBKEY \
+  --for-peer $BOB_PUBKEY \
+  --for-session "secure-session" \
+  --for-mode intersection
+```
+
+### Sealed Session Export (v0.5.0)
+
+```bash
+# After completing a PSI session, export a sealed record
+blindoverlap session-export \
+  --session "my-session" \
+  --state a_state.json \
+  --offer offer.json \
+  --reply reply.json \
+  --completed \
+  --identity alice_id.json \
+  --output session_record.json
+
+# Verify a sealed session record
+blindoverlap session-verify \
+  --record session_record.json \
+  --expect-sealer $ALICE_PUBKEY
+```
+
 ### Party Identity (v0.4.0)
 
 ```bash
@@ -271,8 +319,10 @@ let responder_result = responder.process_reveal(&reveal)?;
 | `session` | Online two-party PSI state machine (v0.2.0+) |
 | `padding` | Set-size padding with domain-separated PRF (v0.2.0+) |
 | `freshness` | Session nonces, deadlines, transcript digests (v0.3.0) |
-| `replay` | In-memory replay protection store (v0.3.0) |
+| `replay` | Replay protection store (in-memory + persistent) (v0.3.0, v0.5.0) |
 | `identity` | Party identity with Ed25519 keypairs (v0.4.0) |
+| `invite` | Invite tickets for session bootstrapping (v0.5.0) |
+| `seal` | Sealed session records for audit export (v0.5.0) |
 
 ## CLI Commands
 
@@ -294,6 +344,10 @@ let responder_result = responder.process_reveal(&reveal)?;
 | `online-reveal` | Process reveal for bilateral mode with `--expect-peer` |
 | `wire-bound-sign` | Create session-bound receipt (v0.3.0) |
 | `wire-bound-verify` | Verify wire-bound receipt with transcript (v0.3.0) |
+| `invite-create` | Issue invite ticket for session (v0.5.0) |
+| `invite-verify` | Verify invite ticket signature and expiry (v0.5.0) |
+| `session-export` | Export sealed session record (v0.5.0) |
+| `session-verify` | Verify sealed session record (v0.5.0) |
 
 ## Protocol Overview
 

@@ -1,6 +1,6 @@
 # BlindOverlap Threat Model
 
-This document describes the security model, assumptions, and known limitations of BlindOverlap v0.3.0.
+This document describes the security model, assumptions, and known limitations of BlindOverlap v0.5.0.
 
 ## Security Model: Semi-Honest
 
@@ -186,6 +186,112 @@ BlindOverlap v0.4.0 introduces party identity and signed wire messages for **cha
 - Use channel binding for all production sessions
 - Remember: identity authenticates WHO, not WHAT they compute
 
+## Invite Tickets (v0.5.0)
+
+BlindOverlap v0.5.0 introduces invite tickets for **session bootstrapping authentication**.
+
+### What Invite Tickets Provide
+
+✅ Session authorization:
+- Short-lived signed capability for starting a session
+- Issuer controls WHO may join a specific session
+- Optional peer binding (ticket only valid for one peer)
+- Mode restriction (intersection-only, cardinality-only, or any)
+- TTL-based expiry with signature verification
+
+### What Invite Tickets Do NOT Provide
+
+❌ **Invite tickets do NOT upgrade PSI security from semi-honest to malicious.**
+
+- A valid ticket proves the issuer authorized the session
+- It does NOT prove the peer will follow the protocol correctly
+- A semi-honest peer can still:
+  - Send fake or crafted elements
+  - Deviate from the protocol
+  - Learn elements not in the intersection
+
+⚠️ **Ticket authorization ≠ Protocol security**
+
+| Threat | Protected? | Notes |
+|--------|-----------|-------|
+| Unauthorized session start | ✅ Yes | Ticket required to join |
+| Expired ticket reuse | ✅ Yes | TTL + signature verification |
+| Peer impersonation | ⚠️ Partial | Only if peer_pubkey is set |
+| Malicious protocol deviation | ❌ No | Still semi-honest model |
+| Ticket theft/replay | ⚠️ TTL helps | Short-lived by design |
+
+### Recommended Practices for Invite Tickets
+
+- Use short TTLs (5 minutes or less)
+- Always bind tickets to specific peers when possible
+- Restrict mode to minimum required (not "any")
+- Verify tickets before creating sessions
+- Protect ticket distribution channel
+
+## Sealed Session Records (v0.5.0)
+
+BlindOverlap v0.5.0 introduces sealed session records for **audit purposes**.
+
+### What Sealed Records Provide
+
+✅ Audit trail:
+- JSON export of session metadata and wire messages
+- Body digest for integrity verification
+- Optional Ed25519 seal by local identity
+- Message hashes for compact storage
+
+### What Sealed Records Do NOT Provide
+
+❌ **Sealed records are audit aids only, not security guarantees.**
+
+- A sealed record proves a session occurred as recorded
+- It does NOT prove parties followed the protocol correctly
+- It does NOT provide non-repudiation against malicious parties
+- Records can be created for sessions that deviated from protocol
+
+⚠️ **Audit trail ≠ Protocol compliance proof**
+
+| Property | Provided? | Notes |
+|----------|-----------|-------|
+| Session occurred as recorded | ✅ Yes | If integrity/seal verify |
+| Protocol was followed correctly | ❌ No | Cannot detect deviations |
+| Non-repudiation | ⚠️ Partial | Seal proves who exported |
+| Tamper detection | ✅ Yes | Body digest + seal |
+
+### Recommended Practices for Sealed Records
+
+- Always seal records with local identity
+- Verify seal signature before trusting records
+- Store records securely for audit purposes
+- Remember: records prove recording, not compliance
+
+## Persistent Replay Store (v0.5.0)
+
+BlindOverlap v0.5.0 extends the replay store with **file-backed persistence**.
+
+### What Persistence Provides
+
+✅ Replay protection across restarts:
+- Nonces and digests survive process restart
+- TTL-based cleanup still applies
+- JSON file storage format
+
+### Persistence Limitations
+
+⚠️ **Best-effort, not crash-safe:**
+
+- Flush is best-effort (memory updated even if write fails)
+- Not designed for concurrent access from multiple processes
+- Simple JSON format, not optimized for large stores
+- Still semi-honest security model
+
+### Recommended Practices for Persistent Replay
+
+- Use dedicated file per application instance
+- Monitor file for corruption
+- Backup periodically for critical applications
+- Don't rely on persistence for security-critical decisions
+
 ## Session Freshness Limitations (v0.3.0)
 
 BlindOverlap v0.3.0 introduces session freshness primitives for **best-effort** replay protection.
@@ -330,4 +436,4 @@ Potential improvements (not in scope for v0.3.0):
 
 ---
 
-**Last Updated**: v0.4.0
+**Last Updated**: v0.5.0

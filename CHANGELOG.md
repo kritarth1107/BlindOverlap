@@ -5,6 +5,67 @@ All notable changes to BlindOverlap will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-09-21
+
+### Added
+
+- **Invite Tickets (`invite` module)**
+  - `InviteTicket`: Short-lived signed capability for bootstrapping channel-bound PSI sessions
+  - Fields: issuer_pubkey, optional peer_pubkey, session_id, allowed_mode, issued_at, expires_at, signature
+  - Domain-separated signing using `BlindOverlap:InviteTicket:v1` tag
+  - `issue()` and `issue_default()` for creating tickets
+  - `verify()`, `verify_issuer()`, `verify_for_peer()`, `verify_for_session()`, `verify_full()` for validation
+  - `AllowedMode` enum (Intersection, Cardinality, Any) for mode restriction
+  - `InviteError` with typed error variants
+  - JSON serialization and file I/O helpers
+
+- **Sealed Session Export (`seal` module)**
+  - `SealedSessionRecord`: JSON export of completed/in-progress online sessions for audit
+  - Captures session metadata, ordered wire messages (or hashes), transcript digest
+  - Body digest for integrity verification (domain-separated hash)
+  - Optional Ed25519 seal using `BlindOverlap:SealedRecord:v1` tag
+  - `SealedSessionBuilder` for fluent record construction
+  - `WireMessageEntry` with hash, size, optional content
+  - `MessageDirection` (Sent/Received) and `SessionStatus` (InProgress, Completed, Failed)
+  - `verify_integrity()` and `verify_seal()` for validation
+  - `SealError` with typed error variants
+
+- **Persistent Replay Store**
+  - `PersistentReplayStore`: File-backed persistence for replay protection
+  - JSON-based storage format (simple append/load pattern)
+  - Data loaded on `open()`, flushed after each record operation
+  - Survives process restart; TTL cleanup still applies on load
+  - `open()` and `open_with_ttl()` constructors
+  - `flush()` for explicit persistence, `reload()` to refresh from disk
+  - `ReplayStoreError` for typed IO/JSON errors
+
+- **Session Invite Integration**
+  - `InitiatorSession::from_invite()`: Create initiator from verified invite ticket
+  - `ResponderSession::from_invite()`: Create responder from verified invite ticket
+  - Automatic channel binding with issuer as expected peer
+  - `SessionError::Invite` variant for ticket verification failures
+
+- **CLI Commands**
+  - `invite-create`: Issue invite ticket with --session, --identity, --peer, --mode, --ttl-secs
+  - `invite-verify`: Verify ticket with --expect-issuer, --for-peer, --for-session, --for-mode
+  - `session-export`: Export SealedSessionRecord from state and wire files
+  - `session-verify`: Verify sealed record integrity and optional seal
+
+- **Tests**
+  - 17 new integration tests for v0.5.0 features
+  - Invite issue/verify/expiry/bad-sig tests
+  - Sealed record roundtrip and integrity tests
+  - Persistent replay survives reload tests
+  - End-to-end invite → signed PSI → export test
+
+### Security Notes
+
+- **Invite tickets authenticate WHO may start a session, not WHAT they compute**
+- Tickets do NOT upgrade PSI security from semi-honest to malicious
+- **Sealed records are audit aids only**, not security guarantees
+- Persistent replay store is best-effort, not crash-safe
+- See THREAT_MODEL.md for detailed security analysis
+
 ## [0.4.0] - 2026-09-20
 
 ### Added
@@ -229,6 +290,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - NOT production-ready
 - Maximum 4,096 elements per set
 
+[0.5.0]: https://github.com/kritarth1107/BlindOverlap/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/kritarth1107/BlindOverlap/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/kritarth1107/BlindOverlap/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/kritarth1107/BlindOverlap/compare/v0.1.0...v0.2.0
