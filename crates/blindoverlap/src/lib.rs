@@ -7,6 +7,7 @@
 
 pub mod fact_id;
 pub mod freshness;
+pub mod invite;
 pub mod identity;
 pub mod padding;
 pub mod protocol;
@@ -23,6 +24,9 @@ pub use freshness::{
     DEFAULT_TTL_SECS,
 };
 pub use identity::{IdentityError, PartyIdentity, PublicIdentity, IDENTITY_DOMAIN};
+pub use invite::{
+    AllowedMode, InviteError, InviteTicket, DEFAULT_TICKET_TTL_SECS, INVITE_TICKET_DOMAIN,
+};
 pub use padding::{
     generate_dummy_fact_ids, generate_dummy_masked_elements, next_power_of_two, pad_fact_ids,
     pad_masked_elements, strip_padding, PaddingConfig, PaddingError,
