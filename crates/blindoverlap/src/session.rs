@@ -35,6 +35,7 @@
 use crate::fact_id::{FactId, FactSet};
 use crate::freshness::{FreshnessError, SessionDeadline, SessionNonce, DEFAULT_TTL_SECS};
 use crate::identity::{PartyIdentity, PublicIdentity};
+use crate::invite::{InviteError, InviteTicket};
 use crate::protocol::{IntersectionMode, MaskedElement, PsiResult, MAX_SET_SIZE};
 use crate::wire::{
     IntersectionReveal, MaskedSetOffer, MaskedSetReply, SignedWireMessage, WireMessage,
@@ -111,6 +112,9 @@ pub enum SessionError {
     /// Wire error during message processing.
     #[error("wire error: {0}")]
     Wire(#[from] crate::wire::WireError),
+    /// Invite ticket verification failed.
+    #[error("invite error: {0}")]
+    Invite(#[from] InviteError),
 }
 
 /// Session state for the initiator (party A).
@@ -292,6 +296,37 @@ impl InitiatorSession {
         let config = SessionConfig::with_identity_binding(DEFAULT_TTL_SECS);
         let mut session = Self::with_config(session_id, fact_set, mode, config)?;
         session.channel_binding = Some(ChannelBinding::new(local_identity.public(), expected_peer));
+        Ok(session)
+    }
+
+    /// Create an initiator session from an invite ticket.
+    ///
+    /// The ticket is verified before creating the session:
+    /// - Signature and expiry are validated
+    /// - Session ID must match the ticket
+    /// - Mode must be permitted by the ticket
+    /// - If ticket has a peer_pubkey, it becomes the expected peer
+    ///
+    /// This is a convenience method that combines ticket verification with
+    /// channel-bound session creation. The ticket issuer becomes the expected peer.
+    pub fn from_invite(
+        ticket: &InviteTicket,
+        fact_set: FactSet,
+        mode: IntersectionMode,
+        local_identity: &PartyIdentity,
+    ) -> Result<Self, SessionError> {
+        // Verify the ticket
+        ticket.verify_for_session(&ticket.session_id, mode)?;
+
+        // Create channel-bound session with issuer as expected peer
+        let session = Self::with_channel_binding(
+            &ticket.session_id,
+            fact_set,
+            mode,
+            local_identity,
+            ticket.issuer_pubkey,
+        )?;
+
         Ok(session)
     }
 
@@ -663,6 +698,39 @@ impl ResponderSession {
         let config = SessionConfig::with_identity_binding(DEFAULT_TTL_SECS);
         let mut session = Self::with_config(session_id, fact_set, mode, config)?;
         session.channel_binding = Some(ChannelBinding::new(local_identity.public(), expected_peer));
+        Ok(session)
+    }
+
+    /// Create a responder session from an invite ticket.
+    ///
+    /// The ticket is verified before creating the session:
+    /// - Signature and expiry are validated
+    /// - Session ID must match the ticket
+    /// - Mode must be permitted by the ticket
+    /// - Local identity must match the ticket's peer_pubkey (if specified)
+    ///
+    /// The ticket issuer becomes the expected peer for signature verification.
+    pub fn from_invite(
+        ticket: &InviteTicket,
+        fact_set: FactSet,
+        mode: IntersectionMode,
+        local_identity: &PartyIdentity,
+    ) -> Result<Self, SessionError> {
+        // Verify the ticket
+        ticket.verify_for_session(&ticket.session_id, mode)?;
+
+        // If ticket specifies a peer, verify local identity matches
+        ticket.verify_for_peer(&local_identity.public())?;
+
+        // Create channel-bound session with issuer as expected peer
+        let session = Self::with_channel_binding(
+            &ticket.session_id,
+            fact_set,
+            mode,
+            local_identity,
+            ticket.issuer_pubkey,
+        )?;
+
         Ok(session)
     }
 
