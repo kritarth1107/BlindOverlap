@@ -1231,3 +1231,402 @@ fn test_unsigned_v2_still_works_without_identity() {
         _ => panic!("expected intersection"),
     }
 }
+
+// === v0.5.0 Integration Tests ===
+
+use blindoverlap::{
+    AllowedMode, InviteError, InviteTicket, PersistentReplayStore, SealedSessionRecord,
+    SessionStatus,
+};
+use tempfile::NamedTempFile;
+
+// === Invite Ticket Tests ===
+
+#[test]
+fn test_invite_issue_verify_roundtrip() {
+    let issuer = PartyIdentity::generate();
+
+    let ticket = InviteTicket::issue_default(
+        &issuer,
+        "test-session",
+        None,
+        AllowedMode::Any,
+    );
+
+    assert!(ticket.verify().is_ok());
+    assert!(ticket.verify_issuer(&issuer.public()).is_ok());
+    assert!(!ticket.is_expired());
+}
+
+#[test]
+fn test_invite_peer_binding() {
+    let issuer = PartyIdentity::generate();
+    let peer = PartyIdentity::generate();
+    let other = PartyIdentity::generate();
+
+    let ticket = InviteTicket::issue_default(
+        &issuer,
+        "peer-bound-session",
+        Some(peer.public()),
+        AllowedMode::Intersection,
+    );
+
+    // Correct peer can use it
+    assert!(ticket.verify_for_peer(&peer.public()).is_ok());
+
+    // Wrong peer cannot
+    assert!(ticket.verify_for_peer(&other.public()).is_err());
+}
+
+#[test]
+fn test_invite_mode_restriction() {
+    let issuer = PartyIdentity::generate();
+
+    let intersection_only = InviteTicket::issue_default(
+        &issuer,
+        "mode-test",
+        None,
+        AllowedMode::Intersection,
+    );
+
+    assert!(intersection_only.verify_for_session("mode-test", IntersectionMode::Intersection).is_ok());
+    assert!(intersection_only.verify_for_session("mode-test", IntersectionMode::Cardinality).is_err());
+}
+
+#[test]
+fn test_invite_expired_ticket() {
+    let issuer = PartyIdentity::generate();
+
+    // Create manually with past timestamps to test expiry detection
+    let ticket = InviteTicket {
+        version: 1,
+        session_id: "expired-session".to_string(),
+        issuer_pubkey: issuer.public(),
+        peer_pubkey: None,
+        allowed_mode: AllowedMode::Any,
+        issued_at: 1000,
+        expires_at: 1001,
+        signature: [0u8; 64], // Invalid sig but we test expiry first
+    };
+
+    assert!(ticket.is_expired());
+    assert!(ticket.remaining_secs().is_none());
+}
+
+#[test]
+fn test_invite_json_roundtrip() {
+    let issuer = PartyIdentity::generate();
+    let peer = PartyIdentity::generate();
+
+    let ticket = InviteTicket::issue_default(
+        &issuer,
+        "json-test",
+        Some(peer.public()),
+        AllowedMode::Cardinality,
+    );
+
+    let json = ticket.to_json_pretty().unwrap();
+    let parsed = InviteTicket::from_json(&json).unwrap();
+
+    assert_eq!(ticket.session_id, parsed.session_id);
+    assert_eq!(ticket.issuer_pubkey, parsed.issuer_pubkey);
+    assert_eq!(ticket.peer_pubkey, parsed.peer_pubkey);
+    assert!(parsed.verify().is_ok());
+}
+
+#[test]
+fn test_invite_tampered_signature_rejected() {
+    let issuer = PartyIdentity::generate();
+
+    let mut ticket = InviteTicket::issue_default(&issuer, "tamper-test", None, AllowedMode::Any);
+    ticket.signature[0] ^= 0xFF;
+
+    assert!(matches!(ticket.verify(), Err(InviteError::InvalidSignature)));
+}
+
+// === Sealed Session Record Tests ===
+
+#[test]
+fn test_sealed_record_build_unsigned() {
+    let record = SealedSessionRecord::builder()
+        .session_id("record-test")
+        .protocol_version(2)
+        .status(SessionStatus::Completed)
+        .add_sent_message("offer", r#"{"test":"offer"}"#)
+        .add_received_message("reply", r#"{"test":"reply"}"#)
+        .build()
+        .unwrap();
+
+    assert_eq!(record.session_id, "record-test");
+    assert_eq!(record.messages.len(), 2);
+    assert!(!record.is_sealed());
+    assert!(record.verify_integrity().is_ok());
+}
+
+#[test]
+fn test_sealed_record_with_seal() {
+    let identity = PartyIdentity::generate();
+
+    let record = SealedSessionRecord::builder()
+        .session_id("sealed-test")
+        .local_pubkey(identity.public())
+        .build_sealed(&identity)
+        .unwrap();
+
+    assert!(record.is_sealed());
+    assert!(record.verify_seal().is_ok());
+    assert!(record.verify_seal_from(&identity.public()).is_ok());
+}
+
+#[test]
+fn test_sealed_record_wrong_sealer_rejected() {
+    let alice = PartyIdentity::generate();
+    let bob = PartyIdentity::generate();
+
+    let record = SealedSessionRecord::builder()
+        .session_id("sealer-test")
+        .build_sealed(&alice)
+        .unwrap();
+
+    assert!(record.verify_seal_from(&alice.public()).is_ok());
+    assert!(record.verify_seal_from(&bob.public()).is_err());
+}
+
+#[test]
+fn test_sealed_record_json_roundtrip() {
+    let identity = PartyIdentity::generate();
+
+    let record = SealedSessionRecord::builder()
+        .session_id("json-record")
+        .add_sent_message("offer", r#"{"data":"test"}"#)
+        .build_sealed(&identity)
+        .unwrap();
+
+    let json = record.to_json_pretty().unwrap();
+    let parsed = SealedSessionRecord::from_json(&json).unwrap();
+
+    assert_eq!(record.session_id, parsed.session_id);
+    assert_eq!(record.body_digest, parsed.body_digest);
+    assert!(parsed.verify_seal().is_ok());
+}
+
+#[test]
+fn test_sealed_record_tampered_fails_integrity() {
+    let mut record = SealedSessionRecord::builder()
+        .session_id("tamper-test")
+        .build()
+        .unwrap();
+
+    record.session_id = "modified".to_string();
+
+    assert!(record.verify_integrity().is_err());
+}
+
+// === Persistent Replay Store Tests ===
+
+#[test]
+fn test_persistent_replay_survives_reload() {
+    let tmp = NamedTempFile::new().unwrap();
+    let path = tmp.path().to_path_buf();
+
+    let nonce1 = SessionNonce::generate();
+    let nonce2 = SessionNonce::generate();
+
+    // First session
+    {
+        let mut store = PersistentReplayStore::open(&path).unwrap();
+        store.record_nonce(nonce1, Some("session-1")).unwrap();
+    }
+
+    // Second session (simulates restart)
+    {
+        let mut store = PersistentReplayStore::open(&path).unwrap();
+        // nonce1 should be rejected
+        assert!(store.check_nonce(&nonce1).is_err());
+        // nonce2 should be fresh
+        store.record_nonce(nonce2, Some("session-2")).unwrap();
+    }
+
+    // Third session
+    {
+        let store = PersistentReplayStore::open(&path).unwrap();
+        assert_eq!(store.nonce_count(), 2);
+        assert!(store.check_nonce(&nonce1).is_err());
+        assert!(store.check_nonce(&nonce2).is_err());
+    }
+}
+
+#[test]
+fn test_persistent_replay_with_digests() {
+    let tmp = NamedTempFile::new().unwrap();
+    let path = tmp.path().to_path_buf();
+
+    let nonce = SessionNonce::generate();
+    let digest = TranscriptDigest::compute("session", &nonce, None, &[], None, None);
+
+    {
+        let mut store = PersistentReplayStore::open(&path).unwrap();
+        store.record_digest(digest, Some("session")).unwrap();
+    }
+
+    {
+        let store = PersistentReplayStore::open(&path).unwrap();
+        assert_eq!(store.digest_count(), 1);
+        assert!(store.check_digest(&digest).is_err());
+    }
+}
+
+// === Invite-Based Session Bootstrap Tests ===
+
+#[test]
+fn test_session_from_invite_initiator() {
+    let issuer = PartyIdentity::generate();
+    let responder_id = PartyIdentity::generate();
+
+    let ticket = InviteTicket::issue_default(
+        &issuer,
+        "invite-session",
+        Some(responder_id.public()),
+        AllowedMode::Intersection,
+    );
+
+    let set = make_set(&[json!({"x": 1}), json!({"x": 2})]);
+
+    // Responder uses the ticket to create session
+    let session = ResponderSession::from_invite(
+        &ticket,
+        set,
+        IntersectionMode::Intersection,
+        &responder_id,
+    )
+    .unwrap();
+
+    assert_eq!(session.session_id(), "invite-session");
+    assert!(session.has_channel_binding());
+}
+
+#[test]
+fn test_session_from_invite_wrong_peer_rejected() {
+    let issuer = PartyIdentity::generate();
+    let intended_peer = PartyIdentity::generate();
+    let wrong_peer = PartyIdentity::generate();
+
+    let ticket = InviteTicket::issue_default(
+        &issuer,
+        "wrong-peer-session",
+        Some(intended_peer.public()),
+        AllowedMode::Any,
+    );
+
+    let set = make_set(&[json!({"x": 1})]);
+
+    // Wrong peer tries to use the ticket
+    let result = ResponderSession::from_invite(
+        &ticket,
+        set,
+        IntersectionMode::Intersection,
+        &wrong_peer,
+    );
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_session_from_invite_wrong_mode_rejected() {
+    let issuer = PartyIdentity::generate();
+    let responder_id = PartyIdentity::generate();
+
+    let ticket = InviteTicket::issue_default(
+        &issuer,
+        "mode-restrict-session",
+        None,
+        AllowedMode::Cardinality, // Only cardinality allowed
+    );
+
+    let set = make_set(&[json!({"x": 1})]);
+
+    // Try to use intersection mode
+    let result = ResponderSession::from_invite(
+        &ticket,
+        set,
+        IntersectionMode::Intersection, // Wrong mode
+        &responder_id,
+    );
+
+    assert!(result.is_err());
+}
+
+// === End-to-End Invite → Signed PSI → Export Test ===
+
+#[test]
+fn test_end_to_end_invite_signed_psi_export() {
+    let alice = PartyIdentity::generate();
+    let bob = PartyIdentity::generate();
+
+    // Alice issues invite to Bob
+    let ticket = InviteTicket::issue_default(
+        &alice,
+        "e2e-session",
+        Some(bob.public()),
+        AllowedMode::Intersection,
+    );
+
+    assert!(ticket.verify().is_ok());
+
+    let set_a = make_set(&[json!({"x": 1}), json!({"x": 2}), json!({"x": 3})]);
+    let set_b = make_set(&[json!({"x": 2}), json!({"x": 3}), json!({"x": 4})]);
+
+    // Alice (the issuer) creates initiator session directly with channel binding
+    // She expects Bob as the peer
+    let mut initiator = InitiatorSession::with_channel_binding(
+        "e2e-session",
+        set_a,
+        IntersectionMode::Intersection,
+        &alice,
+        bob.public(),
+    )
+    .unwrap();
+
+    // Bob (the invitee) creates responder session from the invite
+    // from_invite verifies the ticket and sets issuer (Alice) as expected peer
+    let mut responder = ResponderSession::from_invite(
+        &ticket,
+        set_b,
+        IntersectionMode::Intersection,
+        &bob,
+    )
+    .unwrap();
+
+    // Run signed PSI protocol
+    let signed_offer = initiator.generate_offer_signed(&alice).unwrap();
+    let signed_reply = responder
+        .process_offer_and_reply_signed(&signed_offer, &bob)
+        .unwrap();
+    let result = initiator.process_reply_signed(&signed_reply).unwrap();
+
+    // Verify result
+    match result {
+        PsiResult::Intersection { ids, .. } => {
+            assert_eq!(ids.len(), 2); // {x:2} and {x:3}
+        }
+        _ => panic!("expected intersection"),
+    }
+
+    // Export sealed session record
+    let record = SealedSessionRecord::builder()
+        .session_id("e2e-session")
+        .status(SessionStatus::Completed)
+        .local_pubkey(alice.public())
+        .peer_pubkey(bob.public())
+        .initiator_nonce(*initiator.nonce())
+        .add_sent_message("offer", &serde_json::to_string(&signed_offer).unwrap())
+        .add_received_message("reply", &serde_json::to_string(&signed_reply).unwrap())
+        .build_sealed(&alice)
+        .unwrap();
+
+    // Verify the record
+    assert!(record.verify_seal().is_ok());
+    assert!(record.verify_seal_from(&alice.public()).is_ok());
+    assert_eq!(record.messages.len(), 2);
+    assert_eq!(record.status, SessionStatus::Completed);
+}
