@@ -3,9 +3,10 @@
 use blindoverlap::{
     canonical_json, fact_id_from_str, pad_masked_elements, wire_decode, wire_decode_signed,
     wire_decode_signed_from_peer, wire_encode, wire_encode_pretty, wire_encode_signed_pretty,
-    FactSet, InitiatorSession, IntersectionMode, IntersectionReceipt, MaskedSetOffer,
-    MaskedSetReply, PaddingConfig, PartyIdentity, PsiProtocol, PsiResult, PublicIdentity,
-    ReceiptSigner, ReceiptVerifier, ResponderSession, SessionConfig, SessionNonce,
+    AllowedMode, FactSet, InitiatorSession, IntersectionMode, IntersectionReceipt,
+    InviteTicket, MaskedSetOffer, MaskedSetReply, MessageDirection, PaddingConfig,
+    PartyIdentity, PsiProtocol, PsiResult, PublicIdentity, ReceiptSigner, ReceiptVerifier,
+    ResponderSession, SealedSessionRecord, SessionConfig, SessionNonce, SessionStatus,
     SignedWireMessage, TranscriptDigest, WireBoundReceipt, WireMessage, DEFAULT_TTL_SECS,
 };
 use clap::{Parser, Subcommand};
@@ -376,6 +377,102 @@ enum Commands {
         #[arg(long)]
         expect_root_b: Option<String>,
     },
+
+    /// Create an invite ticket for a PSI session
+    InviteCreate {
+        /// Session ID to authorize
+        #[arg(long)]
+        session: String,
+
+        /// Identity file of the issuer (JSON format)
+        #[arg(short, long)]
+        identity: PathBuf,
+
+        /// Expected peer public key (hex, optional - if set, only this peer can use ticket)
+        #[arg(long)]
+        peer: Option<String>,
+
+        /// Allowed mode: intersection, cardinality, or any (default: any)
+        #[arg(long, default_value = "any")]
+        mode: String,
+
+        /// TTL in seconds (default: 300)
+        #[arg(long, default_value = "300")]
+        ttl_secs: u64,
+
+        /// Output file for ticket (JSON). Default: stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Verify an invite ticket
+    InviteVerify {
+        /// Ticket file (JSON)
+        #[arg(short, long)]
+        ticket: PathBuf,
+
+        /// Expected issuer public key (hex, optional)
+        #[arg(long)]
+        expect_issuer: Option<String>,
+
+        /// Verify for this peer public key (hex, optional)
+        #[arg(long)]
+        for_peer: Option<String>,
+
+        /// Verify for this session ID (optional)
+        #[arg(long)]
+        for_session: Option<String>,
+
+        /// Verify for this mode: intersection or cardinality (optional)
+        #[arg(long)]
+        for_mode: Option<String>,
+    },
+
+    /// Export a sealed session record from state and wire files
+    SessionExport {
+        /// Session ID
+        #[arg(long)]
+        session: String,
+
+        /// Session state file (JSON)
+        #[arg(long)]
+        state: PathBuf,
+
+        /// Offer message file (JSON, optional)
+        #[arg(long)]
+        offer: Option<PathBuf>,
+
+        /// Reply message file (JSON, optional)
+        #[arg(long)]
+        reply: Option<PathBuf>,
+
+        /// Reveal message file (JSON, optional)
+        #[arg(long)]
+        reveal: Option<PathBuf>,
+
+        /// Mark session as completed
+        #[arg(long)]
+        completed: bool,
+
+        /// Identity file for sealing (JSON, optional)
+        #[arg(long)]
+        identity: Option<PathBuf>,
+
+        /// Output file for sealed record (JSON). Default: stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Verify a sealed session record
+    SessionVerify {
+        /// Sealed record file (JSON)
+        #[arg(short, long)]
+        record: PathBuf,
+
+        /// Expected sealer public key (hex, optional)
+        #[arg(long)]
+        expect_sealer: Option<String>,
+    },
 }
 
 fn main() {
@@ -564,6 +661,61 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             expect_root_a.as_deref(),
             expect_root_b.as_deref(),
         )?,
+
+        Commands::InviteCreate {
+            session,
+            identity,
+            peer,
+            mode,
+            ttl_secs,
+            output,
+        } => cmd_invite_create(
+            &session,
+            &identity,
+            peer.as_deref(),
+            &mode,
+            ttl_secs,
+            output.as_deref(),
+        )?,
+
+        Commands::InviteVerify {
+            ticket,
+            expect_issuer,
+            for_peer,
+            for_session,
+            for_mode,
+        } => cmd_invite_verify(
+            &ticket,
+            expect_issuer.as_deref(),
+            for_peer.as_deref(),
+            for_session.as_deref(),
+            for_mode.as_deref(),
+        )?,
+
+        Commands::SessionExport {
+            session,
+            state,
+            offer,
+            reply,
+            reveal,
+            completed,
+            identity,
+            output,
+        } => cmd_session_export(
+            &session,
+            &state,
+            offer.as_deref(),
+            reply.as_deref(),
+            reveal.as_deref(),
+            completed,
+            identity.as_deref(),
+            output.as_deref(),
+        )?,
+
+        Commands::SessionVerify {
+            record,
+            expect_sealer,
+        } => cmd_session_verify(&record, expect_sealer.as_deref())?,
     }
 
     Ok(())
@@ -1630,6 +1782,251 @@ fn cmd_wire_bound_verify(
     );
     println!("  signer: {}", hex::encode(receipt.signer_public_key));
     println!("  receipt_id: {}", hex::encode(receipt.receipt_id()));
+
+    Ok(())
+}
+
+fn cmd_invite_create(
+    session: &str,
+    identity_path: &std::path::Path,
+    peer_hex: Option<&str>,
+    mode: &str,
+    ttl_secs: u64,
+    output: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let identity = PartyIdentity::load_from_file(identity_path)?;
+
+    let peer_pubkey = if let Some(hex) = peer_hex {
+        Some(PublicIdentity::from_hex(hex)?)
+    } else {
+        None
+    };
+
+    let allowed_mode = match mode {
+        "intersection" => AllowedMode::Intersection,
+        "cardinality" => AllowedMode::Cardinality,
+        "any" => AllowedMode::Any,
+        _ => return Err(format!("unknown mode: {mode}").into()),
+    };
+
+    let ticket = InviteTicket::issue(&identity, session, peer_pubkey, allowed_mode, ttl_secs);
+
+    let json = ticket.to_json_pretty()?;
+
+    match output {
+        Some(path) => fs::write(path, &json)?,
+        None => println!("{json}"),
+    }
+
+    eprintln!("ticket_id: {}", hex::encode(ticket.ticket_id()));
+    eprintln!("session_id: {}", ticket.session_id);
+    eprintln!("issuer: {}", ticket.issuer_pubkey.to_hex());
+    if let Some(peer) = &ticket.peer_pubkey {
+        eprintln!("peer: {}", peer.to_hex());
+    }
+    eprintln!("allowed_mode: {:?}", ticket.allowed_mode);
+    eprintln!("ttl_secs: {}", ttl_secs);
+    if let Some(remaining) = ticket.remaining_secs() {
+        eprintln!("expires_in: {}s", remaining);
+    }
+
+    Ok(())
+}
+
+fn cmd_invite_verify(
+    ticket_path: &std::path::Path,
+    expect_issuer_hex: Option<&str>,
+    for_peer_hex: Option<&str>,
+    for_session: Option<&str>,
+    for_mode: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let ticket = InviteTicket::load_from_file(ticket_path)?;
+
+    // Basic verification (signature + expiry)
+    ticket.verify()?;
+
+    // Check issuer if specified
+    if let Some(hex) = expect_issuer_hex {
+        let expected = PublicIdentity::from_hex(hex)?;
+        ticket.verify_issuer(&expected)?;
+    }
+
+    // Check peer if specified
+    if let Some(hex) = for_peer_hex {
+        let peer = PublicIdentity::from_hex(hex)?;
+        ticket.verify_for_peer(&peer)?;
+    }
+
+    // Check session and mode if specified
+    if let Some(session) = for_session {
+        let mode = if let Some(m) = for_mode {
+            match m {
+                "intersection" => IntersectionMode::Intersection,
+                "cardinality" => IntersectionMode::Cardinality,
+                _ => return Err(format!("unknown mode: {m}").into()),
+            }
+        } else {
+            IntersectionMode::Intersection // Default for verification
+        };
+        ticket.verify_for_session(session, mode)?;
+    }
+
+    println!("Invite ticket verification: OK");
+    println!("  version: {}", ticket.version);
+    println!("  session_id: {}", ticket.session_id);
+    println!("  issuer: {}", ticket.issuer_pubkey.to_hex());
+    if let Some(peer) = &ticket.peer_pubkey {
+        println!("  peer: {}", peer.to_hex());
+    } else {
+        println!("  peer: (any)");
+    }
+    println!("  allowed_mode: {:?}", ticket.allowed_mode);
+    println!("  issued_at: {}", ticket.issued_at);
+    println!("  expires_at: {}", ticket.expires_at);
+    if let Some(remaining) = ticket.remaining_secs() {
+        println!("  remaining: {}s", remaining);
+    } else {
+        println!("  remaining: (expired)");
+    }
+    println!("  ticket_id: {}", hex::encode(ticket.ticket_id()));
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_session_export(
+    session_id: &str,
+    state_path: &std::path::Path,
+    offer_path: Option<&std::path::Path>,
+    reply_path: Option<&std::path::Path>,
+    reveal_path: Option<&std::path::Path>,
+    completed: bool,
+    identity_path: Option<&std::path::Path>,
+    output: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let state_json = fs::read_to_string(state_path)?;
+    let state_value: serde_json::Value = serde_json::from_str(&state_json)?;
+
+    let status = if completed {
+        SessionStatus::Completed
+    } else {
+        SessionStatus::InProgress
+    };
+
+    let mut builder = SealedSessionRecord::builder()
+        .session_id(session_id)
+        .protocol_version(2)
+        .status(status);
+
+    // Extract nonces from state if available
+    if let Some(nonce_hex) = state_value.get("nonce_hex").and_then(|v| v.as_str()) {
+        if let Ok(nonce) = SessionNonce::from_hex(nonce_hex) {
+            builder = builder.initiator_nonce(nonce);
+        }
+    }
+    if let Some(nonce_hex) = state_value.get("initiator_nonce_hex").and_then(|v| v.as_str()) {
+        if let Ok(nonce) = SessionNonce::from_hex(nonce_hex) {
+            builder = builder.responder_nonce(nonce);
+        }
+    }
+
+    // Add wire messages
+    if let Some(path) = offer_path {
+        let json = fs::read_to_string(path)?;
+        builder = builder.add_message_hash(MessageDirection::Sent, "offer", &json);
+    }
+    if let Some(path) = reply_path {
+        let json = fs::read_to_string(path)?;
+        builder = builder.add_message_hash(MessageDirection::Received, "reply", &json);
+    }
+    if let Some(path) = reveal_path {
+        let json = fs::read_to_string(path)?;
+        builder = builder.add_message_hash(MessageDirection::Sent, "reveal", &json);
+    }
+
+    // Build and optionally seal
+    let record = if let Some(id_path) = identity_path {
+        let identity = PartyIdentity::load_from_file(id_path)?;
+        builder = builder.local_pubkey(identity.public());
+        builder.build_sealed(&identity)?
+    } else {
+        builder.build()?
+    };
+
+    let json = record.to_json_pretty()?;
+
+    match output {
+        Some(path) => fs::write(path, &json)?,
+        None => println!("{json}"),
+    }
+
+    eprintln!("record_id: {}", hex::encode(record.record_id()));
+    eprintln!("session_id: {}", record.session_id);
+    eprintln!("status: {:?}", record.status);
+    eprintln!("message_count: {}", record.messages.len());
+    if record.is_sealed() {
+        eprintln!("sealed_by: {}", record.sealer().unwrap().to_hex());
+    } else {
+        eprintln!("sealed: no");
+    }
+
+    Ok(())
+}
+
+fn cmd_session_verify(
+    record_path: &std::path::Path,
+    expect_sealer_hex: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let record = SealedSessionRecord::load_from_file(record_path)?;
+
+    // Verify integrity
+    record.verify_integrity()?;
+
+    // Verify seal if present
+    if record.is_sealed() {
+        if let Some(hex) = expect_sealer_hex {
+            let expected = PublicIdentity::from_hex(hex)?;
+            record.verify_seal_from(&expected)?;
+        } else {
+            record.verify_seal()?;
+        }
+    } else if expect_sealer_hex.is_some() {
+        return Err("record is not sealed but expected sealer was specified".into());
+    }
+
+    println!("Sealed session record verification: OK");
+    println!("  version: {}", record.version);
+    println!("  session_id: {}", record.session_id);
+    println!("  protocol_version: {}", record.protocol_version);
+    println!("  status: {:?}", record.status);
+    println!("  started_at: {}", record.started_at);
+    println!("  exported_at: {}", record.exported_at);
+    if let Some(local) = &record.local_pubkey {
+        println!("  local_pubkey: {}", local.to_hex());
+    }
+    if let Some(peer) = &record.peer_pubkey {
+        println!("  peer_pubkey: {}", peer.to_hex());
+    }
+    println!("  message_count: {}", record.messages.len());
+    for msg in &record.messages {
+        println!(
+            "    [{}] {:?} {} ({}B)",
+            msg.sequence, msg.direction, msg.message_type, msg.size_bytes
+        );
+    }
+    if let Some(digest) = &record.transcript_digest {
+        println!("  transcript_digest: {}", digest);
+    }
+    println!("  body_digest: {}", hex::encode(record.body_digest));
+    if record.is_sealed() {
+        let seal = record.seal.as_ref().unwrap();
+        println!("  sealed: yes");
+        println!("  sealer: {}", seal.sealer_pubkey.to_hex());
+        println!("  sealed_at: {}", seal.sealed_at);
+    } else {
+        println!("  sealed: no");
+    }
+    println!("  record_id: {}", hex::encode(record.record_id()));
 
     Ok(())
 }
