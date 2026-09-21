@@ -25,6 +25,7 @@ base64 = { workspace = true }
 [dev-dependencies]
 rand = { workspace = true }
 tokio = { workspace = true }
+tempfile = "3.13"
 
 [[example]]
 name = "basic_psi"

@@ -39,7 +39,7 @@ pub use receipt::{
     IntersectionReceipt, ReceiptError, ReceiptMode, ReceiptSigner, ReceiptVerifier,
     WireBoundReceipt,
 };
-pub use replay::ReplayStore;
+pub use replay::{PersistentReplayStore, ReplayStore, ReplayStoreError};
 pub use seal::{
     MessageDirection, RecordSeal, SealError, SealedSessionBuilder, SealedSessionRecord,
     SessionStatus, WireMessageEntry, SEALED_RECORD_DOMAIN,
