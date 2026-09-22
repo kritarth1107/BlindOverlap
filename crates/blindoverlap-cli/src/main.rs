@@ -3,11 +3,12 @@
 use blindoverlap::{
     canonical_json, fact_id_from_str, pad_masked_elements, wire_decode, wire_decode_signed,
     wire_decode_signed_from_peer, wire_encode, wire_encode_pretty, wire_encode_signed_pretty,
-    AllowedMode, FactSet, InitiatorSession, IntersectionMode, IntersectionReceipt, InviteTicket,
-    MaskedSetOffer, MaskedSetReply, MessageDirection, PaddingConfig, PartyIdentity, PsiProtocol,
-    PsiResult, PublicIdentity, ReceiptSigner, ReceiptVerifier, ResponderSession,
-    SealedSessionRecord, SessionConfig, SessionNonce, SessionStatus, SignedWireMessage,
-    TranscriptDigest, WireBoundReceipt, WireMessage, DEFAULT_TTL_SECS,
+    AbortReason, AbortReceipt, AllowedMode, FactSet, InitiatorSession, IntersectionMode,
+    IntersectionReceipt, InviteTicket, MaskedSetOffer, MaskedSetReply, MessageDirection,
+    PaddingConfig, PartyIdentity, PsiProtocol, PsiResult, PublicIdentity, ReceiptSigner,
+    ReceiptVerifier, ResponderSession, SealedSessionRecord, SessionConfig, SessionLease,
+    SessionNonce, SessionStatus, SignedWireMessage, TranscriptDigest, TrustedPeerBook,
+    WireBoundReceipt, WireMessage, DEFAULT_TTL_SECS,
 };
 use clap::{Parser, Subcommand};
 use std::fs;
@@ -473,6 +474,142 @@ enum Commands {
         #[arg(long)]
         expect_sealer: Option<String>,
     },
+
+    /// Add a peer to the trusted peer book
+    PeerbookAdd {
+        /// Peer book file (JSON). Created if doesn't exist.
+        #[arg(short, long)]
+        book: PathBuf,
+
+        /// Peer public key (hex)
+        #[arg(long)]
+        pubkey: String,
+
+        /// Optional nickname for the peer
+        #[arg(long)]
+        nickname: Option<String>,
+    },
+
+    /// List trusted peers in the peer book
+    PeerbookList {
+        /// Peer book file (JSON)
+        #[arg(short, long)]
+        book: PathBuf,
+    },
+
+    /// Remove a peer from the trusted peer book
+    PeerbookRemove {
+        /// Peer book file (JSON)
+        #[arg(short, long)]
+        book: PathBuf,
+
+        /// Peer public key to remove (hex)
+        #[arg(long)]
+        pubkey: String,
+    },
+
+    /// Issue a session lease
+    LeaseIssue {
+        /// Session ID
+        #[arg(long)]
+        session: String,
+
+        /// Identity file of the issuer (JSON format)
+        #[arg(short, long)]
+        identity: PathBuf,
+
+        /// Peer public key (hex)
+        #[arg(long)]
+        peer: String,
+
+        /// TTL in seconds (default: 1800 = 30 minutes)
+        #[arg(long, default_value = "1800")]
+        ttl_secs: u64,
+
+        /// Output file for lease (JSON). Default: stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Verify a session lease
+    LeaseVerify {
+        /// Lease file (JSON)
+        #[arg(short, long)]
+        lease: PathBuf,
+
+        /// Expected issuer public key (hex, optional)
+        #[arg(long)]
+        expect_issuer: Option<String>,
+
+        /// Verify for this peer public key (hex, optional)
+        #[arg(long)]
+        for_peer: Option<String>,
+
+        /// Verify for this session ID (optional)
+        #[arg(long)]
+        for_session: Option<String>,
+    },
+
+    /// Renew a session lease
+    LeaseRenew {
+        /// Existing lease file (JSON)
+        #[arg(short, long)]
+        lease: PathBuf,
+
+        /// Identity file of the issuer (must match original issuer)
+        #[arg(short, long)]
+        identity: PathBuf,
+
+        /// TTL in seconds (default: 1800 = 30 minutes)
+        #[arg(long, default_value = "1800")]
+        ttl_secs: u64,
+
+        /// Output file for renewed lease (JSON). Default: stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Create a signed abort receipt
+    SessionAbort {
+        /// Session ID
+        #[arg(long)]
+        session: String,
+
+        /// Identity file for signing the abort (JSON format)
+        #[arg(short, long)]
+        identity: PathBuf,
+
+        /// Reason code: user_cancelled, timeout, protocol_error, network_error, etc.
+        #[arg(long, default_value = "user_cancelled")]
+        reason: String,
+
+        /// Optional reason text
+        #[arg(long)]
+        reason_text: Option<String>,
+
+        /// Optional transcript digest (hex, 32 bytes)
+        #[arg(long)]
+        transcript: Option<String>,
+
+        /// Output file for abort receipt (JSON). Default: stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Verify an abort receipt
+    AbortVerify {
+        /// Abort receipt file (JSON)
+        #[arg(short, long)]
+        receipt: PathBuf,
+
+        /// Expected issuer public key (hex, optional)
+        #[arg(long)]
+        expect_issuer: Option<String>,
+
+        /// Verify for this session ID (optional)
+        #[arg(long)]
+        for_session: Option<String>,
+    },
 }
 
 fn main() {
@@ -716,6 +853,65 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             record,
             expect_sealer,
         } => cmd_session_verify(&record, expect_sealer.as_deref())?,
+
+        Commands::PeerbookAdd {
+            book,
+            pubkey,
+            nickname,
+        } => cmd_peerbook_add(&book, &pubkey, nickname.as_deref())?,
+
+        Commands::PeerbookList { book } => cmd_peerbook_list(&book)?,
+
+        Commands::PeerbookRemove { book, pubkey } => cmd_peerbook_remove(&book, &pubkey)?,
+
+        Commands::LeaseIssue {
+            session,
+            identity,
+            peer,
+            ttl_secs,
+            output,
+        } => cmd_lease_issue(&session, &identity, &peer, ttl_secs, output.as_deref())?,
+
+        Commands::LeaseVerify {
+            lease,
+            expect_issuer,
+            for_peer,
+            for_session,
+        } => cmd_lease_verify(
+            &lease,
+            expect_issuer.as_deref(),
+            for_peer.as_deref(),
+            for_session.as_deref(),
+        )?,
+
+        Commands::LeaseRenew {
+            lease,
+            identity,
+            ttl_secs,
+            output,
+        } => cmd_lease_renew(&lease, &identity, ttl_secs, output.as_deref())?,
+
+        Commands::SessionAbort {
+            session,
+            identity,
+            reason,
+            reason_text,
+            transcript,
+            output,
+        } => cmd_session_abort(
+            &session,
+            &identity,
+            &reason,
+            reason_text.as_deref(),
+            transcript.as_deref(),
+            output.as_deref(),
+        )?,
+
+        Commands::AbortVerify {
+            receipt,
+            expect_issuer,
+            for_session,
+        } => cmd_abort_verify(&receipt, expect_issuer.as_deref(), for_session.as_deref())?,
     }
 
     Ok(())
@@ -2039,6 +2235,274 @@ fn cmd_session_verify(
         println!("  sealed: no");
     }
     println!("  record_id: {}", hex::encode(record.record_id()));
+
+    Ok(())
+}
+
+fn cmd_peerbook_add(
+    book_path: &std::path::Path,
+    pubkey_hex: &str,
+    nickname: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut book = TrustedPeerBook::open(book_path)?;
+
+    book.add_hex(pubkey_hex, nickname.map(|s| s.to_string()))?;
+
+    eprintln!("peer added successfully");
+    eprintln!("pubkey: {}", pubkey_hex);
+    if let Some(nick) = nickname {
+        eprintln!("nickname: {}", nick);
+    }
+    eprintln!("total peers: {}", book.len());
+
+    Ok(())
+}
+
+fn cmd_peerbook_list(book_path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
+    let book = TrustedPeerBook::open(book_path)?;
+
+    println!("Trusted peers: {}", book.len());
+    for peer in book.list() {
+        println!("---");
+        println!("  pubkey: {}", peer.pubkey_hex());
+        if let Some(nick) = &peer.nickname {
+            println!("  nickname: {}", nick);
+        }
+        println!("  added_at: {}", peer.added_at);
+    }
+
+    Ok(())
+}
+
+fn cmd_peerbook_remove(
+    book_path: &std::path::Path,
+    pubkey_hex: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut book = TrustedPeerBook::open(book_path)?;
+
+    let removed = book.remove_hex(pubkey_hex)?;
+
+    eprintln!("peer removed successfully");
+    eprintln!("pubkey: {}", removed.pubkey_hex());
+    if let Some(nick) = &removed.nickname {
+        eprintln!("nickname: {}", nick);
+    }
+    eprintln!("remaining peers: {}", book.len());
+
+    Ok(())
+}
+
+fn cmd_lease_issue(
+    session: &str,
+    identity_path: &std::path::Path,
+    peer_hex: &str,
+    ttl_secs: u64,
+    output: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let identity = PartyIdentity::load_from_file(identity_path)?;
+    let peer = PublicIdentity::from_hex(peer_hex)?;
+
+    let lease = SessionLease::issue(&identity, session, peer, ttl_secs);
+
+    let json = lease.to_json_pretty()?;
+
+    match output {
+        Some(path) => fs::write(path, &json)?,
+        None => println!("{json}"),
+    }
+
+    eprintln!("lease_id: {}", hex::encode(lease.lease_id()));
+    eprintln!("session_id: {}", lease.session_id);
+    eprintln!("issuer: {}", lease.issuer_pubkey.to_hex());
+    eprintln!("peer: {}", lease.peer_pubkey.to_hex());
+    eprintln!("ttl_secs: {}", ttl_secs);
+    if let Some(remaining) = lease.remaining_secs() {
+        eprintln!("expires_in: {}s", remaining);
+    }
+
+    Ok(())
+}
+
+fn cmd_lease_verify(
+    lease_path: &std::path::Path,
+    expect_issuer_hex: Option<&str>,
+    for_peer_hex: Option<&str>,
+    for_session: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let lease = SessionLease::load_from_file(lease_path)?;
+
+    // Basic verification
+    lease.verify()?;
+
+    // Check issuer if specified
+    if let Some(hex) = expect_issuer_hex {
+        let expected = PublicIdentity::from_hex(hex)?;
+        lease.verify_issuer(&expected)?;
+    }
+
+    // Check peer if specified
+    if let Some(hex) = for_peer_hex {
+        let peer = PublicIdentity::from_hex(hex)?;
+        lease.verify_for_peer(&peer)?;
+    }
+
+    // Check session if specified
+    if let Some(session) = for_session {
+        lease.verify_for_session(session)?;
+    }
+
+    println!("Session lease verification: OK");
+    println!("  version: {}", lease.version);
+    println!("  session_id: {}", lease.session_id);
+    println!("  issuer: {}", lease.issuer_pubkey.to_hex());
+    println!("  peer: {}", lease.peer_pubkey.to_hex());
+    println!("  issued_at: {}", lease.issued_at);
+    println!("  expires_at: {}", lease.expires_at);
+    println!("  renew_count: {}", lease.renew_count);
+    if lease.is_renewal() {
+        println!(
+            "  parent_lease_id: {}",
+            hex::encode(lease.parent_lease_id.unwrap())
+        );
+    }
+    if let Some(remaining) = lease.remaining_secs() {
+        println!("  remaining: {}s", remaining);
+    } else {
+        println!("  remaining: (expired)");
+    }
+    println!("  lease_id: {}", hex::encode(lease.lease_id()));
+
+    Ok(())
+}
+
+fn cmd_lease_renew(
+    lease_path: &std::path::Path,
+    identity_path: &std::path::Path,
+    ttl_secs: u64,
+    output: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let lease = SessionLease::load_from_file(lease_path)?;
+    let identity = PartyIdentity::load_from_file(identity_path)?;
+
+    let renewed = lease.renew(&identity, ttl_secs)?;
+
+    let json = renewed.to_json_pretty()?;
+
+    match output {
+        Some(path) => fs::write(path, &json)?,
+        None => println!("{json}"),
+    }
+
+    eprintln!("lease_id: {}", hex::encode(renewed.lease_id()));
+    eprintln!(
+        "parent_lease_id: {}",
+        hex::encode(renewed.parent_lease_id.unwrap())
+    );
+    eprintln!("session_id: {}", renewed.session_id);
+    eprintln!("renew_count: {}", renewed.renew_count);
+    eprintln!("ttl_secs: {}", ttl_secs);
+    if let Some(remaining) = renewed.remaining_secs() {
+        eprintln!("expires_in: {}s", remaining);
+    }
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_session_abort(
+    session: &str,
+    identity_path: &std::path::Path,
+    reason_code: &str,
+    reason_text: Option<&str>,
+    transcript_hex: Option<&str>,
+    output: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let identity = PartyIdentity::load_from_file(identity_path)?;
+
+    let reason = match reason_code {
+        "user_cancelled" => AbortReason::UserCancelled,
+        "timeout" => AbortReason::Timeout,
+        "protocol_error" => AbortReason::ProtocolError,
+        "network_error" => AbortReason::NetworkError,
+        "resource_exhaustion" => AbortReason::ResourceExhaustion,
+        "policy_violation" => AbortReason::PolicyViolation,
+        "unknown" => AbortReason::Unknown,
+        "custom" => AbortReason::Custom,
+        _ => return Err(format!("unknown reason code: {}", reason_code).into()),
+    };
+
+    let transcript = if let Some(hex) = transcript_hex {
+        let bytes: [u8; 32] = hex::decode(hex)?
+            .try_into()
+            .map_err(|_| "transcript must be 32 bytes")?;
+        Some(TranscriptDigest::from_bytes(bytes))
+    } else {
+        None
+    };
+
+    let receipt = AbortReceipt::new(
+        &identity,
+        session,
+        reason,
+        reason_text.map(|s| s.to_string()),
+        transcript,
+    );
+
+    let json = receipt.to_json_pretty()?;
+
+    match output {
+        Some(path) => fs::write(path, &json)?,
+        None => println!("{json}"),
+    }
+
+    eprintln!("receipt_id: {}", hex::encode(receipt.receipt_id()));
+    eprintln!("session_id: {}", receipt.session_id);
+    eprintln!("issuer: {}", receipt.issuer_pubkey.to_hex());
+    eprintln!("reason: {}", receipt.reason);
+    if let Some(text) = &receipt.reason_text {
+        eprintln!("reason_text: {}", text);
+    }
+    if receipt.transcript_digest.is_some() {
+        eprintln!("transcript_digest: present");
+    }
+
+    Ok(())
+}
+
+fn cmd_abort_verify(
+    receipt_path: &std::path::Path,
+    expect_issuer_hex: Option<&str>,
+    for_session: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let receipt = AbortReceipt::load_from_file(receipt_path)?;
+
+    // Basic verification
+    receipt.verify()?;
+
+    // Check issuer if specified
+    if let Some(hex) = expect_issuer_hex {
+        let expected = PublicIdentity::from_hex(hex)?;
+        receipt.verify_issuer(&expected)?;
+    }
+
+    // Check session if specified
+    if let Some(session) = for_session {
+        receipt.verify_for_session(session)?;
+    }
+
+    println!("Abort receipt verification: OK");
+    println!("  version: {}", receipt.version);
+    println!("  session_id: {}", receipt.session_id);
+    println!("  issuer: {}", receipt.issuer_pubkey.to_hex());
+    println!("  reason: {}", receipt.reason);
+    if let Some(text) = &receipt.reason_text {
+        println!("  reason_text: {}", text);
+    }
+    println!("  issued_at: {}", receipt.issued_at);
+    if let Some(digest) = &receipt.transcript_digest {
+        println!("  transcript_digest: {}", digest);
+    }
+    println!("  receipt_id: {}", hex::encode(receipt.receipt_id()));
 
     Ok(())
 }
