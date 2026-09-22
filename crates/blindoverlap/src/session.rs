@@ -36,6 +36,8 @@ use crate::fact_id::{FactId, FactSet};
 use crate::freshness::{FreshnessError, SessionDeadline, SessionNonce, DEFAULT_TTL_SECS};
 use crate::identity::{PartyIdentity, PublicIdentity};
 use crate::invite::{InviteError, InviteTicket};
+use crate::lease::{LeaseError, SessionLease};
+use crate::peerbook::{PeerBookError, TrustedPeerBook};
 use crate::protocol::{IntersectionMode, MaskedElement, PsiResult, MAX_SET_SIZE};
 use crate::wire::{
     IntersectionReveal, MaskedSetOffer, MaskedSetReply, SignedWireMessage, WireMessage,
@@ -115,6 +117,33 @@ pub enum SessionError {
     /// Invite ticket verification failed.
     #[error("invite error: {0}")]
     Invite(#[from] InviteError),
+    /// Lease verification failed.
+    #[error("lease error: {0}")]
+    Lease(#[from] LeaseError),
+    /// Peer not trusted in peerbook.
+    #[error("peer book error: {0}")]
+    PeerBook(#[from] PeerBookError),
+}
+
+/// Assert that a peer is trusted before creating a channel-bound session.
+///
+/// This is an optional trust gate helper that checks the peerbook before
+/// allowing a session with an expected peer. It does NOT upgrade PSI security;
+/// it's a policy check for who you're willing to engage with.
+///
+/// # Example
+///
+/// ```ignore
+/// let peerbook = TrustedPeerBook::open(Path::new("peers.json"))?;
+/// require_peer_trusted(&peerbook, &expected_peer)?;
+/// let session = InitiatorSession::with_channel_binding(..., expected_peer)?;
+/// ```
+pub fn require_peer_trusted(
+    peerbook: &TrustedPeerBook,
+    peer: &PublicIdentity,
+) -> Result<(), SessionError> {
+    peerbook.require_trusted(peer)?;
+    Ok(())
 }
 
 /// Session state for the initiator (party A).
@@ -325,6 +354,37 @@ impl InitiatorSession {
             mode,
             local_identity,
             ticket.issuer_pubkey,
+        )?;
+
+        Ok(session)
+    }
+
+    /// Create an initiator session from a session lease.
+    ///
+    /// The lease is verified before creating the session:
+    /// - Signature and expiry are validated
+    /// - Session ID must match the lease
+    /// - Local identity must be the lease peer (the authorized party)
+    ///
+    /// The lease issuer becomes the expected peer for channel binding.
+    /// Use this when continuing a session with lease-based authorization
+    /// instead of a fresh invite ticket.
+    pub fn from_lease(
+        lease: &SessionLease,
+        fact_set: FactSet,
+        mode: IntersectionMode,
+        local_identity: &PartyIdentity,
+    ) -> Result<Self, SessionError> {
+        // Verify the lease for this peer
+        lease.verify_for_peer(&local_identity.public())?;
+
+        // Create channel-bound session with issuer as expected peer
+        let session = Self::with_channel_binding(
+            &lease.session_id,
+            fact_set,
+            mode,
+            local_identity,
+            lease.issuer_pubkey,
         )?;
 
         Ok(session)
@@ -729,6 +789,35 @@ impl ResponderSession {
             mode,
             local_identity,
             ticket.issuer_pubkey,
+        )?;
+
+        Ok(session)
+    }
+
+    /// Create a responder session from a session lease.
+    ///
+    /// The lease is verified before creating the session:
+    /// - Signature and expiry are validated
+    /// - Session ID must match the lease
+    /// - Local identity must be the lease peer (the authorized party)
+    ///
+    /// The lease issuer becomes the expected peer for channel binding.
+    pub fn from_lease(
+        lease: &SessionLease,
+        fact_set: FactSet,
+        mode: IntersectionMode,
+        local_identity: &PartyIdentity,
+    ) -> Result<Self, SessionError> {
+        // Verify the lease for this peer
+        lease.verify_for_peer(&local_identity.public())?;
+
+        // Create channel-bound session with issuer as expected peer
+        let session = Self::with_channel_binding(
+            &lease.session_id,
+            fact_set,
+            mode,
+            local_identity,
+            lease.issuer_pubkey,
         )?;
 
         Ok(session)
