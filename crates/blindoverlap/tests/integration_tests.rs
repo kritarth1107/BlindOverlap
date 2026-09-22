@@ -1616,3 +1616,389 @@ fn test_end_to_end_invite_signed_psi_export() {
     assert_eq!(record.messages.len(), 2);
     assert_eq!(record.status, SessionStatus::Completed);
 }
+
+// === v0.6.0 Integration Tests ===
+
+use blindoverlap::{
+    AbortReason, AbortReceipt, SessionLease, TrustedPeerBook,
+};
+
+// === TrustedPeerBook Tests ===
+
+#[test]
+fn test_peerbook_add_lookup_remove() {
+    let mut book = TrustedPeerBook::in_memory();
+    let alice = PartyIdentity::generate();
+    let bob = PartyIdentity::generate();
+
+    // Add peers
+    book.add(alice.public(), Some("Alice".to_string())).unwrap();
+    book.add(bob.public(), Some("Bob".to_string())).unwrap();
+
+    // Lookup
+    assert!(book.is_trusted(&alice.public()));
+    assert!(book.is_trusted(&bob.public()));
+    assert_eq!(book.len(), 2);
+
+    let alice_entry = book.lookup(&alice.public()).unwrap();
+    assert_eq!(alice_entry.nickname, Some("Alice".to_string()));
+
+    // Remove
+    let removed = book.remove(&alice.public()).unwrap();
+    assert_eq!(removed.nickname, Some("Alice".to_string()));
+    assert!(!book.is_trusted(&alice.public()));
+    assert_eq!(book.len(), 1);
+}
+
+#[test]
+fn test_peerbook_duplicate_rejected() {
+    let mut book = TrustedPeerBook::in_memory();
+    let identity = PartyIdentity::generate();
+
+    book.add(identity.public(), None).unwrap();
+    let result = book.add(identity.public(), Some("Duplicate".to_string()));
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_peerbook_file_persistence() {
+    let tmp = NamedTempFile::new().unwrap();
+    let path = tmp.path().to_path_buf();
+
+    let identity = PartyIdentity::generate();
+
+    {
+        let mut book = TrustedPeerBook::open(&path).unwrap();
+        book.add(identity.public(), Some("Persistent".to_string())).unwrap();
+    }
+
+    {
+        let book = TrustedPeerBook::open(&path).unwrap();
+        assert!(book.is_trusted(&identity.public()));
+        let peer = book.lookup(&identity.public()).unwrap();
+        assert_eq!(peer.nickname, Some("Persistent".to_string()));
+    }
+}
+
+#[test]
+fn test_peerbook_require_trusted() {
+    let book = TrustedPeerBook::in_memory();
+    let identity = PartyIdentity::generate();
+
+    let result = book.require_trusted(&identity.public());
+    assert!(result.is_err());
+}
+
+// === SessionLease Tests ===
+
+#[test]
+fn test_lease_issue_verify() {
+    let issuer = PartyIdentity::generate();
+    let peer = PartyIdentity::generate();
+
+    let lease = SessionLease::issue_default(&issuer, "test-session", peer.public());
+
+    assert!(lease.verify().is_ok());
+    assert!(!lease.is_expired());
+    assert!(!lease.is_renewal());
+    assert_eq!(lease.renew_count, 0);
+}
+
+#[test]
+fn test_lease_verify_full() {
+    let issuer = PartyIdentity::generate();
+    let peer = PartyIdentity::generate();
+
+    let lease = SessionLease::issue_default(&issuer, "full-test", peer.public());
+
+    // Full verification passes
+    assert!(lease
+        .verify_full(&issuer.public(), &peer.public(), "full-test")
+        .is_ok());
+
+    // Wrong issuer
+    let other = PartyIdentity::generate();
+    assert!(lease
+        .verify_full(&other.public(), &peer.public(), "full-test")
+        .is_err());
+
+    // Wrong peer
+    assert!(lease
+        .verify_full(&issuer.public(), &other.public(), "full-test")
+        .is_err());
+
+    // Wrong session
+    assert!(lease
+        .verify_full(&issuer.public(), &peer.public(), "wrong-session")
+        .is_err());
+}
+
+#[test]
+fn test_lease_renew_chain() {
+    let issuer = PartyIdentity::generate();
+    let peer = PartyIdentity::generate();
+
+    let lease1 = SessionLease::issue_default(&issuer, "chain-session", peer.public());
+    let lease2 = lease1.renew_default(&issuer).unwrap();
+    let lease3 = lease2.renew_default(&issuer).unwrap();
+
+    assert_eq!(lease3.renew_count, 2);
+    assert!(lease3.is_renewal());
+    assert_eq!(lease3.parent_lease_id, Some(lease2.lease_id()));
+    assert!(lease3.verify().is_ok());
+}
+
+#[test]
+fn test_lease_renew_wrong_issuer() {
+    let issuer = PartyIdentity::generate();
+    let other = PartyIdentity::generate();
+    let peer = PartyIdentity::generate();
+
+    let lease = SessionLease::issue_default(&issuer, "test", peer.public());
+    let result = lease.renew_default(&other);
+
+    assert!(result.is_err());
+}
+
+#[test]
+fn test_lease_json_roundtrip() {
+    let issuer = PartyIdentity::generate();
+    let peer = PartyIdentity::generate();
+
+    let lease = SessionLease::issue_default(&issuer, "json-test", peer.public());
+    let json = lease.to_json_pretty().unwrap();
+    let parsed = SessionLease::from_json(&json).unwrap();
+
+    assert_eq!(lease.session_id, parsed.session_id);
+    assert_eq!(lease.issuer_pubkey, parsed.issuer_pubkey);
+    assert_eq!(lease.peer_pubkey, parsed.peer_pubkey);
+    assert!(parsed.verify().is_ok());
+}
+
+// === AbortReceipt Tests ===
+
+#[test]
+fn test_abort_receipt_simple() {
+    let issuer = PartyIdentity::generate();
+
+    let receipt = AbortReceipt::simple(&issuer, "abort-session", AbortReason::UserCancelled);
+
+    assert!(receipt.verify().is_ok());
+    assert_eq!(receipt.reason, AbortReason::UserCancelled);
+    assert!(receipt.reason_text.is_none());
+}
+
+#[test]
+fn test_abort_receipt_with_reason_text() {
+    let issuer = PartyIdentity::generate();
+
+    let receipt = AbortReceipt::with_reason(&issuer, "abort-session", "Connection lost");
+
+    assert!(receipt.verify().is_ok());
+    assert_eq!(receipt.reason, AbortReason::Custom);
+    assert_eq!(receipt.reason_text, Some("Connection lost".to_string()));
+}
+
+#[test]
+fn test_abort_receipt_with_transcript() {
+    let issuer = PartyIdentity::generate();
+    let nonce = SessionNonce::generate();
+    let digest = TranscriptDigest::compute("abort-session", &nonce, None, &[], None, None);
+
+    let receipt = AbortReceipt::with_transcript(&issuer, "abort-session", AbortReason::Timeout, digest);
+
+    assert!(receipt.verify().is_ok());
+    assert_eq!(receipt.transcript_digest, Some(digest));
+}
+
+#[test]
+fn test_abort_receipt_json_roundtrip() {
+    let issuer = PartyIdentity::generate();
+
+    let receipt = AbortReceipt::with_reason(&issuer, "json-test", "Testing");
+    let json = receipt.to_json_pretty().unwrap();
+    let parsed = AbortReceipt::from_json(&json).unwrap();
+
+    assert_eq!(receipt.session_id, parsed.session_id);
+    assert_eq!(receipt.reason, parsed.reason);
+    assert_eq!(receipt.reason_text, parsed.reason_text);
+    assert!(parsed.verify().is_ok());
+}
+
+#[test]
+fn test_abort_receipt_tampered_rejected() {
+    let issuer = PartyIdentity::generate();
+
+    let mut receipt = AbortReceipt::simple(&issuer, "tamper-test", AbortReason::Unknown);
+    receipt.signature[0] ^= 0xFF;
+
+    assert!(receipt.verify().is_err());
+}
+
+// === Session from Lease Tests ===
+
+#[test]
+fn test_session_from_lease() {
+    let issuer = PartyIdentity::generate();
+    let peer = PartyIdentity::generate();
+
+    let lease = SessionLease::issue_default(&issuer, "lease-session", peer.public());
+
+    let set = make_set(&[json!({"x": 1}), json!({"x": 2})]);
+
+    // Peer uses the lease to create responder session
+    let session = ResponderSession::from_lease(
+        &lease,
+        set,
+        IntersectionMode::Intersection,
+        &peer,
+    ).unwrap();
+
+    assert_eq!(session.session_id(), "lease-session");
+    assert!(session.has_channel_binding());
+}
+
+#[test]
+fn test_session_from_lease_wrong_peer() {
+    let issuer = PartyIdentity::generate();
+    let intended_peer = PartyIdentity::generate();
+    let wrong_peer = PartyIdentity::generate();
+
+    let lease = SessionLease::issue_default(&issuer, "lease-session", intended_peer.public());
+
+    let set = make_set(&[json!({"x": 1})]);
+
+    // Wrong peer tries to use the lease
+    let result = ResponderSession::from_lease(
+        &lease,
+        set,
+        IntersectionMode::Intersection,
+        &wrong_peer,
+    );
+
+    assert!(result.is_err());
+}
+
+// === Sealed Record with Aborted Status ===
+
+#[test]
+fn test_sealed_record_aborted_status() {
+    let identity = PartyIdentity::generate();
+
+    let record = SealedSessionRecord::builder()
+        .session_id("aborted-session")
+        .status(SessionStatus::Aborted)
+        .build_sealed(&identity)
+        .unwrap();
+
+    assert_eq!(record.status, SessionStatus::Aborted);
+    assert!(record.verify_seal().is_ok());
+}
+
+// === End-to-End: Peerbook Trust Gate → Lease → PSI → Abort ===
+
+#[test]
+fn test_end_to_end_peerbook_lease_psi_abort() {
+    let alice = PartyIdentity::generate();
+    let bob = PartyIdentity::generate();
+
+    // Alice adds Bob to her peerbook
+    let mut alice_peerbook = TrustedPeerBook::in_memory();
+    alice_peerbook.add(bob.public(), Some("Bob".to_string())).unwrap();
+
+    // Alice issues a lease to Bob
+    let lease = SessionLease::issue_default(&alice, "e2e-v6-session", bob.public());
+    assert!(lease.verify().is_ok());
+
+    // Bob creates responder from lease (Alice is expected peer)
+    let set_a = make_set(&[json!({"x": 1}), json!({"x": 2}), json!({"x": 3})]);
+    let set_b = make_set(&[json!({"x": 2}), json!({"x": 3}), json!({"x": 4})]);
+
+    // Verify Bob is trusted before starting session
+    assert!(alice_peerbook.require_trusted(&bob.public()).is_ok());
+
+    let mut initiator = InitiatorSession::with_channel_binding(
+        "e2e-v6-session",
+        set_a,
+        IntersectionMode::Intersection,
+        &alice,
+        bob.public(),
+    ).unwrap();
+
+    let mut responder = ResponderSession::from_lease(
+        &lease,
+        set_b,
+        IntersectionMode::Intersection,
+        &bob,
+    ).unwrap();
+
+    // Run signed PSI protocol
+    let signed_offer = initiator.generate_offer_signed(&alice).unwrap();
+    let signed_reply = responder
+        .process_offer_and_reply_signed(&signed_offer, &bob)
+        .unwrap();
+    let result = initiator.process_reply_signed(&signed_reply).unwrap();
+
+    match result {
+        PsiResult::Intersection { ids, .. } => {
+            assert_eq!(ids.len(), 2); // {x:2} and {x:3}
+        }
+        _ => panic!("expected intersection"),
+    }
+
+    // Create abort receipt to cancel before bilateral reveal
+    let abort = AbortReceipt::simple(&alice, "e2e-v6-session", AbortReason::UserCancelled);
+    assert!(abort.verify().is_ok());
+
+    // Export sealed session record with Aborted status
+    let record = SealedSessionRecord::builder()
+        .session_id("e2e-v6-session")
+        .status(SessionStatus::Aborted)
+        .local_pubkey(alice.public())
+        .peer_pubkey(bob.public())
+        .initiator_nonce(*initiator.nonce())
+        .build_sealed(&alice)
+        .unwrap();
+
+    assert!(record.verify_seal().is_ok());
+    assert_eq!(record.status, SessionStatus::Aborted);
+}
+
+// === Wire AbortMessage Tests ===
+
+use blindoverlap::AbortMessage;
+
+#[test]
+fn test_abort_message_roundtrip() {
+    let abort = AbortMessage::new("abort-wire-test", "user_cancelled");
+    let message = WireMessage::Abort(abort.clone());
+
+    let json = wire_encode(&message).unwrap();
+    let decoded = wire_decode(&json).unwrap();
+
+    match decoded {
+        WireMessage::Abort(decoded_abort) => {
+            assert_eq!(decoded_abort.session_id, abort.session_id);
+            assert_eq!(decoded_abort.reason_code, abort.reason_code);
+        }
+        _ => panic!("expected abort message"),
+    }
+}
+
+#[test]
+fn test_abort_message_with_reason_text() {
+    let abort = AbortMessage::with_reason("abort-wire-test", "custom", "Something went wrong");
+    let message = WireMessage::Abort(abort);
+
+    let json = wire_encode(&message).unwrap();
+    let decoded = wire_decode(&json).unwrap();
+
+    assert!(decoded.is_abort());
+    match decoded {
+        WireMessage::Abort(a) => {
+            assert_eq!(a.reason_text, Some("Something went wrong".to_string()));
+        }
+        _ => panic!(),
+    }
+}
