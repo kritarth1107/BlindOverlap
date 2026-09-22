@@ -225,6 +225,9 @@ impl TrustedPeerBook {
 
     fn load(&mut self) -> Result<(), PeerBookError> {
         let contents = std::fs::read_to_string(&self.path)?;
+        if contents.trim().is_empty() {
+            return Ok(());
+        }
         let stored: StoredPeerBook = serde_json::from_str(&contents)?;
 
         self.peers.clear();
