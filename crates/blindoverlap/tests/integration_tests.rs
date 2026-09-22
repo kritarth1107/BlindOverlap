@@ -1619,9 +1619,7 @@ fn test_end_to_end_invite_signed_psi_export() {
 
 // === v0.6.0 Integration Tests ===
 
-use blindoverlap::{
-    AbortReason, AbortReceipt, SessionLease, TrustedPeerBook,
-};
+use blindoverlap::{AbortReason, AbortReceipt, SessionLease, TrustedPeerBook};
 
 // === TrustedPeerBook Tests ===
 
@@ -1670,7 +1668,8 @@ fn test_peerbook_file_persistence() {
 
     {
         let mut book = TrustedPeerBook::open(&path).unwrap();
-        book.add(identity.public(), Some("Persistent".to_string())).unwrap();
+        book.add(identity.public(), Some("Persistent".to_string()))
+            .unwrap();
     }
 
     {
@@ -1806,7 +1805,8 @@ fn test_abort_receipt_with_transcript() {
     let nonce = SessionNonce::generate();
     let digest = TranscriptDigest::compute("abort-session", &nonce, None, &[], None, None);
 
-    let receipt = AbortReceipt::with_transcript(&issuer, "abort-session", AbortReason::Timeout, digest);
+    let receipt =
+        AbortReceipt::with_transcript(&issuer, "abort-session", AbortReason::Timeout, digest);
 
     assert!(receipt.verify().is_ok());
     assert_eq!(receipt.transcript_digest, Some(digest));
@@ -1848,12 +1848,8 @@ fn test_session_from_lease() {
     let set = make_set(&[json!({"x": 1}), json!({"x": 2})]);
 
     // Peer uses the lease to create responder session
-    let session = ResponderSession::from_lease(
-        &lease,
-        set,
-        IntersectionMode::Intersection,
-        &peer,
-    ).unwrap();
+    let session =
+        ResponderSession::from_lease(&lease, set, IntersectionMode::Intersection, &peer).unwrap();
 
     assert_eq!(session.session_id(), "lease-session");
     assert!(session.has_channel_binding());
@@ -1870,12 +1866,8 @@ fn test_session_from_lease_wrong_peer() {
     let set = make_set(&[json!({"x": 1})]);
 
     // Wrong peer tries to use the lease
-    let result = ResponderSession::from_lease(
-        &lease,
-        set,
-        IntersectionMode::Intersection,
-        &wrong_peer,
-    );
+    let result =
+        ResponderSession::from_lease(&lease, set, IntersectionMode::Intersection, &wrong_peer);
 
     assert!(result.is_err());
 }
@@ -1905,7 +1897,9 @@ fn test_end_to_end_peerbook_lease_psi_abort() {
 
     // Alice adds Bob to her peerbook
     let mut alice_peerbook = TrustedPeerBook::in_memory();
-    alice_peerbook.add(bob.public(), Some("Bob".to_string())).unwrap();
+    alice_peerbook
+        .add(bob.public(), Some("Bob".to_string()))
+        .unwrap();
 
     // Alice issues a lease to Bob
     let lease = SessionLease::issue_default(&alice, "e2e-v6-session", bob.public());
@@ -1924,14 +1918,11 @@ fn test_end_to_end_peerbook_lease_psi_abort() {
         IntersectionMode::Intersection,
         &alice,
         bob.public(),
-    ).unwrap();
+    )
+    .unwrap();
 
-    let mut responder = ResponderSession::from_lease(
-        &lease,
-        set_b,
-        IntersectionMode::Intersection,
-        &bob,
-    ).unwrap();
+    let mut responder =
+        ResponderSession::from_lease(&lease, set_b, IntersectionMode::Intersection, &bob).unwrap();
 
     // Run signed PSI protocol
     let signed_offer = initiator.generate_offer_signed(&alice).unwrap();

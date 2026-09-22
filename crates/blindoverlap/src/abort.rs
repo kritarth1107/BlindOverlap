@@ -27,7 +27,7 @@ use thiserror::Error;
 pub const ABORT_RECEIPT_DOMAIN: &[u8] = b"BlindOverlap:AbortReceipt:v1";
 
 /// Standard abort reason codes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum AbortReason {
     /// User requested cancellation.
@@ -43,6 +43,7 @@ pub enum AbortReason {
     /// Policy violation (trust check failed).
     PolicyViolation,
     /// Unknown or unspecified reason.
+    #[default]
     Unknown,
     /// Custom reason (check reason_text for details).
     Custom,
@@ -61,12 +62,6 @@ impl AbortReason {
             AbortReason::Unknown => "unknown",
             AbortReason::Custom => "custom",
         }
-    }
-}
-
-impl Default for AbortReason {
-    fn default() -> Self {
-        AbortReason::Unknown
     }
 }
 

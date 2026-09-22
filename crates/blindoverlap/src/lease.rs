@@ -175,7 +175,7 @@ impl SessionLease {
     /// The issuer signs a new lease referencing the old lease as parent.
     /// The renew_count is incremented and the parent_lease_id is set.
     pub fn renew(&self, issuer: &PartyIdentity, ttl_secs: u64) -> Result<Self, LeaseError> {
-        if &self.issuer_pubkey != &issuer.public() {
+        if self.issuer_pubkey != issuer.public() {
             return Err(LeaseError::IssuerMismatch {
                 expected: self.issuer_pubkey.to_hex(),
                 got: issuer.public().to_hex(),
