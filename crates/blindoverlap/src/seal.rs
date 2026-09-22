@@ -108,8 +108,10 @@ pub enum SessionStatus {
     InProgress,
     /// Session completed successfully.
     Completed,
-    /// Session failed or was aborted.
+    /// Session failed (protocol error, validation failure).
     Failed,
+    /// Session was explicitly aborted by a party.
+    Aborted,
 }
 
 /// A sealed session record for audit purposes.
@@ -572,6 +574,7 @@ fn status_byte(status: SessionStatus) -> u8 {
         SessionStatus::InProgress => 0,
         SessionStatus::Completed => 1,
         SessionStatus::Failed => 2,
+        SessionStatus::Aborted => 3,
     }
 }
 

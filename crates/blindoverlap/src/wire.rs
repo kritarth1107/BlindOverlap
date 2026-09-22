@@ -44,12 +44,17 @@ pub mod tags {
     /// Tag for IntersectionReveal messages (v3, signed).
     pub const INTERSECTION_REVEAL_V3: &str = "BlindOverlap:IntersectionReveal:v3";
 
+    /// Tag for AbortMessage messages (v1).
+    pub const ABORT_MESSAGE_V1: &str = "BlindOverlap:AbortMessage:v1";
+
     /// Current default tag for MaskedSetOffer (v2).
     pub const MASKED_SET_OFFER: &str = MASKED_SET_OFFER_V2;
     /// Current default tag for MaskedSetReply (v2).
     pub const MASKED_SET_REPLY: &str = MASKED_SET_REPLY_V2;
     /// Current default tag for IntersectionReveal (v2).
     pub const INTERSECTION_REVEAL: &str = INTERSECTION_REVEAL_V2;
+    /// Current default tag for AbortMessage (v1).
+    pub const ABORT_MESSAGE: &str = ABORT_MESSAGE_V1;
 
     /// Domain tag for signed wire messages.
     pub const SIGNED_MESSAGE_DOMAIN: &str = "BlindOverlap:SignedWireMessage:v1";
@@ -406,6 +411,77 @@ impl IntersectionReveal {
     }
 }
 
+/// Abort message for mid-protocol cancellation (v0.6.0+).
+///
+/// Allows a party to signal session abort with a reason code.
+/// This is a wire message variant, not a signed receipt.
+/// For signed abort records, use `AbortReceipt` from the `abort` module.
+///
+/// ## Backward Compatibility
+///
+/// Older peers (pre-v0.6.0) may reject unknown message types.
+/// Document this clearly in protocol negotiation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AbortMessage {
+    /// Protocol version (1).
+    pub version: u8,
+    /// Domain-separated message tag.
+    pub tag: String,
+    /// Session identifier.
+    pub session_id: String,
+    /// Abort reason code.
+    pub reason_code: String,
+    /// Optional reason text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason_text: Option<String>,
+    /// Unix timestamp when abort was issued.
+    pub issued_at: u64,
+}
+
+impl AbortMessage {
+    /// Create a new abort message.
+    pub fn new(session_id: impl Into<String>, reason_code: impl Into<String>) -> Self {
+        Self {
+            version: 1,
+            tag: tags::ABORT_MESSAGE_V1.to_string(),
+            session_id: session_id.into(),
+            reason_code: reason_code.into(),
+            reason_text: None,
+            issued_at: crate::freshness::current_unix_time(),
+        }
+    }
+
+    /// Create an abort message with reason text.
+    pub fn with_reason(
+        session_id: impl Into<String>,
+        reason_code: impl Into<String>,
+        reason_text: impl Into<String>,
+    ) -> Self {
+        Self {
+            version: 1,
+            tag: tags::ABORT_MESSAGE_V1.to_string(),
+            session_id: session_id.into(),
+            reason_code: reason_code.into(),
+            reason_text: Some(reason_text.into()),
+            issued_at: crate::freshness::current_unix_time(),
+        }
+    }
+
+    /// Validate message structure.
+    pub fn validate(&self) -> Result<(), WireError> {
+        if self.tag != tags::ABORT_MESSAGE_V1 {
+            return Err(WireError::InvalidTag {
+                expected: tags::ABORT_MESSAGE.to_string(),
+                got: self.tag.clone(),
+            });
+        }
+        if self.version != 1 {
+            return Err(WireError::UnsupportedVersion(self.version));
+        }
+        Ok(())
+    }
+}
+
 /// Envelope type for any wire message.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "message_type")]
@@ -419,6 +495,9 @@ pub enum WireMessage {
     /// IntersectionReveal message.
     #[serde(rename = "reveal")]
     Reveal(IntersectionReveal),
+    /// AbortMessage for mid-protocol cancellation (v0.6.0+).
+    #[serde(rename = "abort")]
+    Abort(AbortMessage),
 }
 
 impl WireMessage {
@@ -428,6 +507,7 @@ impl WireMessage {
             WireMessage::Offer(m) => &m.session_id,
             WireMessage::Reply(m) => &m.session_id,
             WireMessage::Reveal(m) => &m.session_id,
+            WireMessage::Abort(m) => &m.session_id,
         }
     }
 
@@ -437,6 +517,7 @@ impl WireMessage {
             WireMessage::Offer(m) => m.validate(),
             WireMessage::Reply(m) => m.validate(),
             WireMessage::Reveal(m) => m.validate(),
+            WireMessage::Abort(m) => m.validate(),
         }
     }
 
@@ -466,7 +547,13 @@ impl WireMessage {
             WireMessage::Offer(m) => &m.tag,
             WireMessage::Reply(m) => &m.tag,
             WireMessage::Reveal(m) => &m.tag,
+            WireMessage::Abort(m) => &m.tag,
         }
+    }
+
+    /// Check if this is an abort message.
+    pub fn is_abort(&self) -> bool {
+        matches!(self, WireMessage::Abort(_))
     }
 }
 

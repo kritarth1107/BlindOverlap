@@ -1044,6 +1044,15 @@ fn cmd_wire_decode(
                     m.responder_doubly_masked.len()
                 );
             }
+            WireMessage::Abort(m) => {
+                println!("type: AbortMessage");
+                println!("session_id: {}", m.session_id);
+                println!("version: {}", m.version);
+                println!("reason_code: {}", m.reason_code);
+                if let Some(text) = &m.reason_text {
+                    println!("reason_text: {}", text);
+                }
+            }
         }
     } else {
         let pretty = serde_json::to_string_pretty(&message)?;
