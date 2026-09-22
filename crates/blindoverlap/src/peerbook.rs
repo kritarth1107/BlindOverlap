@@ -215,10 +215,7 @@ impl TrustedPeerBook {
     ///
     /// Returns the peer entry if trusted, error otherwise.
     /// Use this as an optional gate before channel-bound sessions.
-    pub fn require_trusted(
-        &self,
-        pubkey: &PublicIdentity,
-    ) -> Result<&TrustedPeer, PeerBookError> {
+    pub fn require_trusted(&self, pubkey: &PublicIdentity) -> Result<&TrustedPeer, PeerBookError> {
         self.lookup(pubkey)
             .ok_or_else(|| PeerBookError::PeerNotFound(pubkey.to_hex()))
     }
@@ -300,7 +297,8 @@ mod tests {
         let mut book = TrustedPeerBook::in_memory();
         let identity = PartyIdentity::generate();
 
-        book.add(identity.public(), Some("Bob".to_string())).unwrap();
+        book.add(identity.public(), Some("Bob".to_string()))
+            .unwrap();
         assert!(book.is_trusted(&identity.public()));
 
         let removed = book.remove(&identity.public()).unwrap();
