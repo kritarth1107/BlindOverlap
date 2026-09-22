@@ -21,7 +21,10 @@ BlindOverlap is an agent-native private set intersection (PSI) library for conte
 - **Invite tickets**: Short-lived signed capabilities for session bootstrapping (v0.5.0)
 - **Sealed session export**: Auditable JSON export of completed sessions (v0.5.0)
 - **Persistent replay store**: File-backed replay protection that survives restart (v0.5.0)
-- **CLI tool**: Encode facts, run intersections, wire encode/decode, online sessions, receipts, identity, invites
+- **Trusted peer book**: File-backed directory of known peer identities (v0.6.0)
+- **Session leases**: Signed time-bounded leases extending session authority (v0.6.0)
+- **Abort receipts**: Signed records of mid-protocol cancellation (v0.6.0)
+- **CLI tool**: Encode facts, run intersections, wire encode/decode, online sessions, receipts, identity, invites, leases, abort
 
 ## Honest Scope & Limitations
 
@@ -34,11 +37,14 @@ BlindOverlap is an agent-native private set intersection (PSI) library for conte
 | Padding | ⚠️ Best-effort size hiding (semi-honest only) |
 | Freshness | ⚠️ Best-effort TTL/replay (semi-honest only) |
 | Invite tickets | ⚠️ Authenticates WHO, not protocol compliance |
+| Session leases | ⚠️ Authenticates session continuation, not compliance |
+| Peer book | ⚠️ Trust policy, not PSI security upgrade |
+| Abort receipts | ⚠️ Audit aid only, not enforced cancellation |
 | Sealed records | ⚠️ Audit aid only, not security guarantee |
 | Scale | **Toy scale**: ≤4,096 IDs per set, 32 bytes each |
 | Production readiness | ❌ **NOT production ready** — for experimentation only |
 
-> **Warning**: This is a v0.5.0 release intended for experimentation and learning. Do not use in production systems where security is critical. See [THREAT_MODEL.md](THREAT_MODEL.md) for details.
+> **Warning**: This is a v0.6.0 release intended for experimentation and learning. Do not use in production systems where security is critical. See [THREAT_MODEL.md](THREAT_MODEL.md) for details.
 
 ## Quick Start
 
@@ -323,6 +329,9 @@ let responder_result = responder.process_reveal(&reveal)?;
 | `identity` | Party identity with Ed25519 keypairs (v0.4.0) |
 | `invite` | Invite tickets for session bootstrapping (v0.5.0) |
 | `seal` | Sealed session records for audit export (v0.5.0) |
+| `peerbook` | Trusted peer book for known identities (v0.6.0) |
+| `lease` | Session leases for extended authority (v0.6.0) |
+| `abort` | Abort receipts for mid-protocol cancellation (v0.6.0) |
 
 ## CLI Commands
 
@@ -348,6 +357,14 @@ let responder_result = responder.process_reveal(&reveal)?;
 | `invite-verify` | Verify invite ticket signature and expiry (v0.5.0) |
 | `session-export` | Export sealed session record (v0.5.0) |
 | `session-verify` | Verify sealed session record (v0.5.0) |
+| `peerbook-add` | Add peer to trusted peer book (v0.6.0) |
+| `peerbook-list` | List trusted peers (v0.6.0) |
+| `peerbook-remove` | Remove peer from peer book (v0.6.0) |
+| `lease-issue` | Issue session lease (v0.6.0) |
+| `lease-verify` | Verify session lease (v0.6.0) |
+| `lease-renew` | Renew session lease (v0.6.0) |
+| `session-abort` | Create signed abort receipt (v0.6.0) |
+| `abort-verify` | Verify abort receipt (v0.6.0) |
 
 ## Protocol Overview
 

@@ -415,9 +415,112 @@ BlindOverlap's security relies on:
 11. **Configure appropriate TTL** for your session lifetime needs (v0.3.0)
 12. **Track nonces** if replay across restarts is a concern (v0.3.0)
 
+## Trusted Peer Book (v0.6.0)
+
+BlindOverlap v0.6.0 introduces a trusted peer book for **managing known party identities**.
+
+### What Peer Book Provides
+
+✅ Trust registry:
+- File-backed directory of known peer Ed25519 public keys
+- Nickname/label and added_at timestamp for each peer
+- Optional trust gate before channel-bound sessions
+
+### What Peer Book Does NOT Provide
+
+❌ **Peer book trust is out-of-band policy, not PSI security.**
+
+- Adding a peer to the book does NOT make PSI malicious-secure
+- Trust decisions must be made through external verification
+- A trusted peer can still deviate from the protocol
+
+⚠️ **Trust registry ≠ Protocol security**
+
+| Property | Provided? | Notes |
+|----------|-----------|-------|
+| Track known peers | ✅ Yes | With metadata |
+| Policy enforcement | ✅ Yes | Optional trust gate |
+| Protocol compliance | ❌ No | Still semi-honest model |
+| Out-of-band verification | ❌ No | User responsibility |
+
+### Recommended Practices for Peer Book
+
+- Verify peer identities out-of-band before adding
+- Use require_trusted() as policy enforcement
+- Remember: trust registry is convenience, not security
+
+## Session Leases (v0.6.0)
+
+BlindOverlap v0.6.0 introduces session leases for **extending session authority**.
+
+### What Session Leases Provide
+
+✅ Session continuation authentication:
+- Signed time-bounded lease extending beyond invite TTL
+- Renewal chain for long-running sessions
+- Issuer/peer binding for channel authentication
+
+### What Session Leases Do NOT Provide
+
+❌ **Session leases do NOT upgrade PSI security from semi-honest to malicious.**
+
+- A valid lease proves the issuer authorized continued participation
+- It does NOT prove the peer will follow the protocol correctly
+- A semi-honest peer can still deviate
+
+⚠️ **Lease authorization ≠ Protocol security**
+
+| Property | Provided? | Notes |
+|----------|-----------|-------|
+| Session continuation auth | ✅ Yes | Signed by issuer |
+| Renewal chain integrity | ✅ Yes | Parent lease tracking |
+| TTL enforcement | ✅ Yes | Expiry validation |
+| Protocol compliance | ❌ No | Still semi-honest model |
+
+### Recommended Practices for Session Leases
+
+- Use short TTLs appropriate for your use case
+- Verify lease chains if using renewals
+- Remember: leases authenticate WHO, not WHAT they compute
+
+## Abort Receipts (v0.6.0)
+
+BlindOverlap v0.6.0 introduces abort receipts for **mid-protocol cancellation**.
+
+### What Abort Receipts Provide
+
+✅ Abort audit trail:
+- Signed record of WHO aborted and WHY
+- Optional transcript binding for context
+- Reason codes for categorization
+
+### What Abort Receipts Do NOT Provide
+
+❌ **Abort receipts are audit aids, not security guarantees.**
+
+- They do NOT force the other party to accept the abort
+- They do NOT prevent continued protocol execution
+- A malicious party could claim abort without actually aborting
+
+⚠️ **Abort receipt ≠ Enforced cancellation**
+
+| Property | Provided? | Notes |
+|----------|-----------|-------|
+| Audit trail | ✅ Yes | Signed by issuer |
+| Reason documentation | ✅ Yes | Code + optional text |
+| Transcript binding | ⚠️ Optional | If available at abort |
+| Enforced cancellation | ❌ No | Cooperative only |
+
+### Recommended Practices for Abort Receipts
+
+- Include transcript digest when available
+- Use standard reason codes for interoperability
+- Store abort receipts for audit purposes
+- Remember: abort is cooperative, not enforced
+
 ## Future Considerations
 
-Potential improvements (not in scope for v0.3.0):
+Potential improvements (not in scope for v0.6.0):
 
 - Malicious security via VOLE-PSI or zkSNARKs
 - Constant-time implementations
@@ -436,4 +539,4 @@ Potential improvements (not in scope for v0.3.0):
 
 ---
 
-**Last Updated**: v0.5.0
+**Last Updated**: v0.6.0

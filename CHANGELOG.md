@@ -5,6 +5,83 @@ All notable changes to BlindOverlap will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-09-22
+
+### Added
+
+- **Trusted Peer Book (`peerbook` module)**
+  - `TrustedPeerBook`: File-backed directory of known peer Ed25519 public keys
+  - `TrustedPeer` struct with pubkey, optional nickname, added_at timestamp
+  - Add/remove/lookup by pubkey hex with duplicate rejection
+  - `require_trusted()` for optional trust gate before channel-bound sessions
+  - JSON file persistence with load/save
+  - Honest limitation: trust is out-of-band policy, not PSI security
+
+- **Session Lease (`lease` module)**
+  - `SessionLease`: Signed time-bounded lease extending session authority
+  - Fields: issuer_pubkey, peer_pubkey, session_id, issued_at, expires_at, renew_count
+  - Domain-separated signing using `BlindOverlap:SessionLease:v1` tag
+  - `issue()` and `issue_default()` for creating leases (default TTL: 30 minutes)
+  - `verify()`, `verify_issuer()`, `verify_for_peer()`, `verify_for_session()`, `verify_full()`
+  - `renew()` for issuer to extend lease with parent chain tracking
+  - Optional `parent_lease_id` for renewal chain integrity
+  - JSON serialization and file I/O helpers
+
+- **Abort Receipt (`abort` module)**
+  - `AbortReceipt`: Signed abort receipt for mid-protocol cancellation
+  - `AbortReason` enum: UserCancelled, Timeout, ProtocolError, NetworkError, etc.
+  - Domain-separated signing using `BlindOverlap:AbortReceipt:v1` tag
+  - `simple()`, `with_reason()`, `with_transcript()` constructors
+  - Optional transcript digest binding for audit trails
+  - `AbortError` with typed error variants
+
+- **Wire Protocol: AbortMessage**
+  - `AbortMessage` struct for mid-protocol cancellation over wire
+  - `WireMessage::Abort` variant with backward compatibility note
+  - Domain tag `BlindOverlap:AbortMessage:v1`
+  - Older peers (pre-v0.6.0) may reject unknown message types
+
+- **Session Status: Aborted**
+  - `SessionStatus::Aborted` for explicit session abort in sealed records
+  - Distinct from `Failed` (protocol error) for clearer audit trails
+
+- **Lease-Aware Session Bootstrap**
+  - `InitiatorSession::from_lease()`: Create session from verified lease
+  - `ResponderSession::from_lease()`: Create responder from verified lease
+  - Lease issuer becomes expected peer for channel binding
+  - Keep InviteTicket paths working alongside lease paths
+
+- **Optional Peerbook Trust Gate**
+  - `require_peer_trusted()` helper function
+  - Check peerbook before creating channel-bound sessions
+  - Policy enforcement, not security upgrade
+
+- **CLI Commands**
+  - `peerbook-add`: Add peer with pubkey and optional nickname
+  - `peerbook-list`: List all trusted peers
+  - `peerbook-remove`: Remove peer by pubkey
+  - `lease-issue`: Issue session lease with TTL
+  - `lease-verify`: Verify lease signature and bindings
+  - `lease-renew`: Renew existing lease with new TTL
+  - `session-abort`: Create signed abort receipt
+  - `abort-verify`: Verify abort receipt signature
+
+- **Tests**
+  - 25+ new integration tests for v0.6.0 features
+  - Peerbook CRUD, file persistence, trust gate tests
+  - Lease issue/verify/renew chain tests
+  - Abort sign/verify with transcript tests
+  - Session from_lease tests
+  - End-to-end: peerbook trust gate → lease → PSI → abort → sealed export
+
+### Security Notes
+
+- **Peerbook trust is out-of-band policy, not PSI security**
+- **Leases authenticate WHO may continue a session, not WHAT they compute**
+- **Abort receipts are audit aids only, not security guarantees**
+- None of these features upgrade PSI from semi-honest to malicious
+- See THREAT_MODEL.md for detailed security analysis
+
 ## [0.5.0] - 2026-09-21
 
 ### Added
@@ -290,6 +367,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - NOT production-ready
 - Maximum 4,096 elements per set
 
+[0.6.0]: https://github.com/kritarth1107/BlindOverlap/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/kritarth1107/BlindOverlap/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/kritarth1107/BlindOverlap/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/kritarth1107/BlindOverlap/compare/v0.2.0...v0.3.0
