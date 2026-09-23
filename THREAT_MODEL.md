@@ -1,6 +1,6 @@
 # BlindOverlap Threat Model
 
-This document describes the security model, assumptions, and known limitations of BlindOverlap v0.5.0.
+This document describes the security model, assumptions, and known limitations of BlindOverlap v0.7.0.
 
 ## Security Model: Semi-Honest
 
@@ -518,9 +518,86 @@ BlindOverlap v0.6.0 introduces abort receipts for **mid-protocol cancellation**.
 - Store abort receipts for audit purposes
 - Remember: abort is cooperative, not enforced
 
+## Policy Profiles (v0.7.0)
+
+BlindOverlap v0.7.0 introduces policy profiles for **local session bootstrap gating**.
+
+### What Policy Profiles Provide
+
+✅ Local policy enforcement:
+- Named, serializable session policies
+- Constraint checking: trusted peer required, minimum padding, max TTL, lease/invite required
+- Cardinality-only mode restriction
+- Builder pattern for easy configuration
+
+### What Policy Profiles Do NOT Provide
+
+❌ **Policy profiles are a local policy gate, not a cryptographic upgrade.**
+
+- They enforce YOUR requirements before engaging
+- They do NOT change the semi-honest security model
+- A policy pass means parameters meet your stated constraints
+- A policy pass does NOT guarantee protocol compliance
+
+⚠️ **Policy gate ≠ Protocol security**
+
+| Property | Provided? | Notes |
+|----------|-----------|-------|
+| Local constraint enforcement | ✅ Yes | Before session start |
+| Named, serializable policies | ✅ Yes | JSON format |
+| Protocol compliance | ❌ No | Still semi-honest model |
+| Cryptographic security upgrade | ❌ No | Policy is advisory |
+
+### Recommended Practices for Policy Profiles
+
+- Define policies per environment (dev, staging, prod)
+- Require trusted peer + invite for production
+- Set appropriate max TTL and min padding
+- Remember: policies enforce YOUR constraints, not security
+
+## Overlap Attestations (v0.7.0)
+
+BlindOverlap v0.7.0 introduces overlap attestations for **portable, verifiable outcome claims**.
+
+### What Overlap Attestations Provide
+
+✅ Portable outcome claims:
+- Ed25519-signed attestation of intersection outcome
+- Third-party verification WITHOUT re-running PSI
+- Binds: issuer, mode, set roots, outcome, optional session/transcript
+- TTL-based expiry with signature verification
+- Optional dual-signature (co-attestation) for mutual agreement
+
+### What Overlap Attestations Do NOT Provide
+
+❌ **An attestation proves the issuer claimed an outcome, not that it's true.**
+
+- The issuer could lie about the outcome
+- The other party may not have agreed
+- The PSI protocol may not have been followed correctly
+- Dual-signature helps but still relies on semi-honest parties
+
+⚠️ **Attestation ≠ Truth or mutual agreement**
+
+| Property | Provided? | Notes |
+|----------|-----------|-------|
+| Issuer claimed outcome | ✅ Yes | Signed by issuer |
+| Verifiable without re-run | ✅ Yes | Third-party can verify |
+| Outcome is truthful | ❌ No | Issuer could lie |
+| Other party agreed | ⚠️ Co-sign | Only if dual-signed |
+| Protocol was followed | ❌ No | Still semi-honest model |
+
+### Recommended Practices for Overlap Attestations
+
+- Use dual-signature for mutual agreement scenarios
+- Bind to session ID and transcript when available
+- Use short TTLs for time-sensitive attestations
+- Store attestations for audit purposes
+- Remember: attestation proves claim, not truth
+
 ## Future Considerations
 
-Potential improvements (not in scope for v0.6.0):
+Potential improvements (considered for future versions):
 
 - Malicious security via VOLE-PSI or zkSNARKs
 - Constant-time implementations
@@ -539,4 +616,4 @@ Potential improvements (not in scope for v0.6.0):
 
 ---
 
-**Last Updated**: v0.6.0
+**Last Updated**: v0.7.0

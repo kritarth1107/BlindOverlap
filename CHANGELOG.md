@@ -5,6 +5,55 @@ All notable changes to BlindOverlap will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-09-23
+
+### Added
+
+- **Policy Profiles (`policy` module)**
+  - `PolicyProfile`: Named, serializable session policy for gating session bootstrap
+  - Fields: name, require_trusted_peer, min_pad_to, max_ttl_secs, require_lease, require_invite, allow_cardinality_only
+  - `check()` / `enforce()` for validating session parameters against policy constraints
+  - `PolicyProfile::builder()` for fluent policy construction
+  - `PolicyProfile::strict()` and `PolicyProfile::permissive()` presets
+  - `SessionParams` struct for representing session parameters to check
+  - JSON serialization and file I/O helpers
+  - Honest limitation: local policy gate, not cryptographic upgrade
+
+- **Overlap Attestations (`attest` module)**
+  - `OverlapAttestation`: Ed25519-signed attestation of intersection outcome
+  - Third-party verification WITHOUT re-running PSI
+  - Domain-separated signing using `blindoverlap-attest-v1` tag
+  - Binds: session_id (optional), mode (intersection | cardinality), set_root_a, set_root_b, intersection_root OR cardinality, transcript_digest (optional), issued_at, expires_at, issuer_pubkey
+  - `sign_intersection()` and `sign_cardinality()` constructors
+  - `verify()`, `verify_issuer()`, `verify_session()`, `verify_full()` for validation
+  - TTL-based expiry with `is_expired()` and `remaining_secs()`
+  - `co_sign()` for dual-signature (co-attestation) support
+  - `verify_co_signature()` for mutual agreement verification
+  - `attestation_id()` for unique attestation identifier
+  - JSON serialization and file I/O helpers
+  - Honest limitation: attestation proves issuer claimed outcome, not that outcome is truthful
+
+- **CLI Commands**
+  - `policy-check`: Check session parameters against a policy profile
+  - `policy-show`: Display a policy profile (from file or built-in example)
+  - `attest-sign`: Sign an overlap attestation (intersection or cardinality mode)
+  - `attest-verify`: Verify an overlap attestation (signature, expiry, issuer, session)
+
+- **Tests**
+  - 12 new integration tests for v0.7.0 features
+  - PolicyProfile constraint checking tests
+  - Attestation sign/verify/dual-sign tests
+  - Policy + attestation integration test
+
+### Security Notes
+
+- **Policy profiles are local policy gates, not cryptographic security upgrades**
+- **Attestations prove an issuer CLAIMED an outcome, not that it is truthful**
+- Dual-signature (co-attestation) helps establish mutual agreement but still relies on semi-honest parties
+- None of these features upgrade PSI from semi-honest to malicious security
+- This is the FINAL release of the BlindOverlap campaign week (Sep 17–23)
+- See THREAT_MODEL.md for detailed security analysis
+
 ## [0.6.0] - 2026-09-22
 
 ### Added
@@ -367,6 +416,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - NOT production-ready
 - Maximum 4,096 elements per set
 
+[0.7.0]: https://github.com/kritarth1107/BlindOverlap/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/kritarth1107/BlindOverlap/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/kritarth1107/BlindOverlap/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/kritarth1107/BlindOverlap/compare/v0.3.0...v0.4.0

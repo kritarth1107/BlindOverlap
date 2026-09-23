@@ -24,7 +24,9 @@ BlindOverlap is an agent-native private set intersection (PSI) library for conte
 - **Trusted peer book**: File-backed directory of known peer identities (v0.6.0)
 - **Session leases**: Signed time-bounded leases extending session authority (v0.6.0)
 - **Abort receipts**: Signed records of mid-protocol cancellation (v0.6.0)
-- **CLI tool**: Encode facts, run intersections, wire encode/decode, online sessions, receipts, identity, invites, leases, abort
+- **Policy profiles**: Named session policies for gating session bootstrap (v0.7.0)
+- **Overlap attestations**: Ed25519-signed portable attestations of PSI outcomes (v0.7.0)
+- **CLI tool**: Encode facts, run intersections, wire encode/decode, online sessions, receipts, identity, invites, leases, abort, policy, attestations
 
 ## Honest Scope & Limitations
 
@@ -41,10 +43,12 @@ BlindOverlap is an agent-native private set intersection (PSI) library for conte
 | Peer book | ⚠️ Trust policy, not PSI security upgrade |
 | Abort receipts | ⚠️ Audit aid only, not enforced cancellation |
 | Sealed records | ⚠️ Audit aid only, not security guarantee |
+| Policy profiles | ⚠️ Local policy gate, not cryptographic upgrade |
+| Overlap attestations | ⚠️ Proves issuer claimed outcome, not mutual agreement |
 | Scale | **Toy scale**: ≤4,096 IDs per set, 32 bytes each |
 | Production readiness | ❌ **NOT production ready** — for experimentation only |
 
-> **Warning**: This is a v0.6.0 release intended for experimentation and learning. Do not use in production systems where security is critical. See [THREAT_MODEL.md](THREAT_MODEL.md) for details.
+> **Warning**: This is a v0.7.0 release (final BlindOverlap campaign day) intended for experimentation and learning. Do not use in production systems where security is critical. See [THREAT_MODEL.md](THREAT_MODEL.md) for details.
 
 ## Quick Start
 
@@ -332,6 +336,8 @@ let responder_result = responder.process_reveal(&reveal)?;
 | `peerbook` | Trusted peer book for known identities (v0.6.0) |
 | `lease` | Session leases for extended authority (v0.6.0) |
 | `abort` | Abort receipts for mid-protocol cancellation (v0.6.0) |
+| `policy` | Policy profiles for session bootstrap gating (v0.7.0) |
+| `attest` | Overlap attestations for portable outcome verification (v0.7.0) |
 
 ## CLI Commands
 
@@ -365,6 +371,10 @@ let responder_result = responder.process_reveal(&reveal)?;
 | `lease-renew` | Renew session lease (v0.6.0) |
 | `session-abort` | Create signed abort receipt (v0.6.0) |
 | `abort-verify` | Verify abort receipt (v0.6.0) |
+| `policy-check` | Check session params against a policy profile (v0.7.0) |
+| `policy-show` | Show a policy profile (from file or built-in example) (v0.7.0) |
+| `attest-sign` | Sign an overlap attestation (v0.7.0) |
+| `attest-verify` | Verify an overlap attestation (v0.7.0) |
 
 ## Protocol Overview
 
