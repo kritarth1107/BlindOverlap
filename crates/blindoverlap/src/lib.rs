@@ -6,6 +6,7 @@
 #![deny(unsafe_code)]
 
 pub mod abort;
+pub mod attest;
 pub mod fact_id;
 pub mod freshness;
 pub mod identity;
@@ -13,6 +14,7 @@ pub mod invite;
 pub mod lease;
 pub mod padding;
 pub mod peerbook;
+pub mod policy;
 pub mod protocol;
 pub mod receipt;
 pub mod replay;
@@ -21,6 +23,7 @@ pub mod session;
 pub mod wire;
 
 pub use abort::{AbortError, AbortReason, AbortReceipt, ABORT_RECEIPT_DOMAIN};
+pub use attest::{AttestationError, AttestationMode, OverlapAttestation, ATTESTATION_DOMAIN};
 pub use fact_id::{
     canonical_json, fact_id_from_json, fact_id_from_str, FactId, FactIdError, FactSet,
 };
@@ -38,6 +41,7 @@ pub use padding::{
     pad_masked_elements, strip_padding, PaddingConfig, PaddingError,
 };
 pub use peerbook::{PeerBookError, TrustedPeer, TrustedPeerBook};
+pub use policy::{PolicyError, PolicyProfile, SessionParams, POLICY_PROFILE_DOMAIN};
 pub use protocol::{
     IntersectionMode, MaskedElement, PsiError, PsiParty, PsiProtocol, PsiResult, MAX_SET_SIZE,
 };
