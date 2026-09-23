@@ -3,12 +3,13 @@
 use blindoverlap::{
     canonical_json, fact_id_from_str, pad_masked_elements, wire_decode, wire_decode_signed,
     wire_decode_signed_from_peer, wire_encode, wire_encode_pretty, wire_encode_signed_pretty,
-    AbortReason, AbortReceipt, AllowedMode, FactSet, InitiatorSession, IntersectionMode,
-    IntersectionReceipt, InviteTicket, MaskedSetOffer, MaskedSetReply, MessageDirection,
-    PaddingConfig, PartyIdentity, PsiProtocol, PsiResult, PublicIdentity, ReceiptSigner,
-    ReceiptVerifier, ResponderSession, SealedSessionRecord, SessionConfig, SessionLease,
-    SessionNonce, SessionStatus, SignedWireMessage, TranscriptDigest, TrustedPeerBook,
-    WireBoundReceipt, WireMessage, DEFAULT_TTL_SECS,
+    AbortReason, AbortReceipt, AllowedMode, AttestationMode, FactSet, InitiatorSession,
+    IntersectionMode, IntersectionReceipt, InviteTicket, MaskedSetOffer, MaskedSetReply,
+    MessageDirection, OverlapAttestation, PaddingConfig, PartyIdentity, PolicyProfile, PsiProtocol,
+    PsiResult, PublicIdentity, ReceiptSigner, ReceiptVerifier, ResponderSession,
+    SealedSessionRecord, SessionConfig, SessionLease, SessionNonce, SessionParams, SessionStatus,
+    SignedWireMessage, TranscriptDigest, TrustedPeerBook, WireBoundReceipt, WireMessage,
+    DEFAULT_TTL_SECS,
 };
 use clap::{Parser, Subcommand};
 use std::fs;
@@ -610,6 +611,110 @@ enum Commands {
         #[arg(long)]
         for_session: Option<String>,
     },
+
+    /// Check session parameters against a policy profile
+    PolicyCheck {
+        /// Policy profile file (JSON)
+        #[arg(short, long)]
+        policy: PathBuf,
+
+        /// Whether a trusted peer is available
+        #[arg(long)]
+        has_trusted_peer: bool,
+
+        /// Padding size
+        #[arg(long)]
+        pad_to: Option<usize>,
+
+        /// Session TTL in seconds
+        #[arg(long, default_value = "300")]
+        ttl_secs: u64,
+
+        /// Whether a session lease is available
+        #[arg(long)]
+        has_lease: bool,
+
+        /// Whether an invite ticket is available
+        #[arg(long)]
+        has_invite: bool,
+
+        /// Whether intersection mode is requested (default: true)
+        #[arg(long, default_value = "true")]
+        intersection_mode: bool,
+    },
+
+    /// Show a policy profile (from file or built-in example)
+    PolicyShow {
+        /// Policy profile file (JSON). If omitted, shows a built-in example.
+        #[arg(short, long)]
+        policy: Option<PathBuf>,
+
+        /// Show a strict example profile instead of permissive default
+        #[arg(long)]
+        strict: bool,
+    },
+
+    /// Sign an overlap attestation
+    AttestSign {
+        /// Set root A (hex)
+        #[arg(long)]
+        root_a: String,
+
+        /// Set root B (hex)
+        #[arg(long)]
+        root_b: String,
+
+        /// Mode: intersection or cardinality
+        #[arg(long, default_value = "intersection")]
+        mode: String,
+
+        /// Intersection root (hex, required for intersection mode)
+        #[arg(long)]
+        intersection_root: Option<String>,
+
+        /// Cardinality (required for cardinality mode)
+        #[arg(long)]
+        cardinality: Option<usize>,
+
+        /// Session ID (optional)
+        #[arg(long)]
+        session: Option<String>,
+
+        /// Transcript digest (hex, optional)
+        #[arg(long)]
+        transcript: Option<String>,
+
+        /// Identity file for signing (JSON format)
+        #[arg(short, long)]
+        identity: PathBuf,
+
+        /// TTL in seconds (default: 3600 = 1 hour)
+        #[arg(long, default_value = "3600")]
+        ttl_secs: u64,
+
+        /// Output file for attestation (JSON). Default: stdout.
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+    },
+
+    /// Verify an overlap attestation
+    AttestVerify {
+        /// Attestation file (JSON)
+        #[arg(short, long)]
+        attestation: PathBuf,
+
+        /// Expected issuer public key (hex, optional)
+        #[arg(long)]
+        expect_issuer: Option<String>,
+
+        /// Expected session ID (optional)
+        #[arg(long)]
+        expect_session: Option<String>,
+
+        /// Also verify co-signature if present
+        #[arg(long)]
+        verify_co_signature: bool,
+    },
 }
 
 fn main() {
@@ -912,6 +1017,62 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             expect_issuer,
             for_session,
         } => cmd_abort_verify(&receipt, expect_issuer.as_deref(), for_session.as_deref())?,
+
+        Commands::PolicyCheck {
+            policy,
+            has_trusted_peer,
+            pad_to,
+            ttl_secs,
+            has_lease,
+            has_invite,
+            intersection_mode,
+        } => cmd_policy_check(
+            &policy,
+            has_trusted_peer,
+            pad_to,
+            ttl_secs,
+            has_lease,
+            has_invite,
+            intersection_mode,
+        )?,
+
+        Commands::PolicyShow { policy, strict } => cmd_policy_show(policy.as_deref(), strict)?,
+
+        Commands::AttestSign {
+            root_a,
+            root_b,
+            mode,
+            intersection_root,
+            cardinality,
+            session,
+            transcript,
+            identity,
+            ttl_secs,
+            output,
+        } => cmd_attest_sign(
+            &root_a,
+            &root_b,
+            &mode,
+            intersection_root.as_deref(),
+            cardinality,
+            session.as_deref(),
+            transcript.as_deref(),
+            &identity,
+            ttl_secs,
+            output.as_deref(),
+        )?,
+
+        Commands::AttestVerify {
+            attestation,
+            expect_issuer,
+            expect_session,
+            verify_co_signature,
+        } => cmd_attest_verify(
+            &attestation,
+            expect_issuer.as_deref(),
+            expect_session.as_deref(),
+            verify_co_signature,
+        )?,
     }
 
     Ok(())
@@ -2503,6 +2664,244 @@ fn cmd_abort_verify(
         println!("  transcript_digest: {}", digest);
     }
     println!("  receipt_id: {}", hex::encode(receipt.receipt_id()));
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_policy_check(
+    policy_path: &std::path::Path,
+    has_trusted_peer: bool,
+    pad_to: Option<usize>,
+    ttl_secs: u64,
+    has_lease: bool,
+    has_invite: bool,
+    is_intersection_mode: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let policy = PolicyProfile::load_from_file(policy_path)?;
+
+    let params = SessionParams {
+        has_trusted_peer,
+        pad_to,
+        ttl_secs,
+        has_lease,
+        has_invite,
+        is_intersection_mode,
+    };
+
+    match policy.check(&params) {
+        Ok(()) => {
+            println!("Policy check: PASS");
+            println!("  policy: {}", policy.name);
+            println!("  has_trusted_peer: {}", has_trusted_peer);
+            if let Some(pad) = pad_to {
+                println!("  pad_to: {}", pad);
+            }
+            println!("  ttl_secs: {}", ttl_secs);
+            println!("  has_lease: {}", has_lease);
+            println!("  has_invite: {}", has_invite);
+            println!("  intersection_mode: {}", is_intersection_mode);
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("Policy check: FAIL");
+            eprintln!("  policy: {}", policy.name);
+            eprintln!("  error: {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn cmd_policy_show(
+    policy_path: Option<&std::path::Path>,
+    strict: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let policy = match policy_path {
+        Some(path) => PolicyProfile::load_from_file(path)?,
+        None => {
+            if strict {
+                PolicyProfile::strict("example-strict")
+            } else {
+                PolicyProfile::permissive("example-permissive")
+            }
+        }
+    };
+
+    let json = policy.to_json_pretty()?;
+    println!("{}", json);
+
+    eprintln!("---");
+    eprintln!("policy_name: {}", policy.name);
+    eprintln!("require_trusted_peer: {}", policy.require_trusted_peer);
+    if let Some(min_pad) = policy.min_pad_to {
+        eprintln!("min_pad_to: {}", min_pad);
+    }
+    if let Some(max_ttl) = policy.max_ttl_secs {
+        eprintln!("max_ttl_secs: {}", max_ttl);
+    }
+    eprintln!("require_lease: {}", policy.require_lease);
+    eprintln!("require_invite: {}", policy.require_invite);
+    eprintln!("allow_cardinality_only: {}", policy.allow_cardinality_only);
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn cmd_attest_sign(
+    root_a_hex: &str,
+    root_b_hex: &str,
+    mode: &str,
+    intersection_root_hex: Option<&str>,
+    cardinality: Option<usize>,
+    session: Option<&str>,
+    transcript_hex: Option<&str>,
+    identity_path: &std::path::Path,
+    ttl_secs: u64,
+    output: Option<&std::path::Path>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let root_a: [u8; 32] = hex::decode(root_a_hex)?
+        .try_into()
+        .map_err(|_| "root_a must be 32 bytes")?;
+    let root_b: [u8; 32] = hex::decode(root_b_hex)?
+        .try_into()
+        .map_err(|_| "root_b must be 32 bytes")?;
+
+    let identity = PartyIdentity::load_from_file(identity_path)?;
+
+    let transcript = if let Some(hex) = transcript_hex {
+        let bytes: [u8; 32] = hex::decode(hex)?
+            .try_into()
+            .map_err(|_| "transcript must be 32 bytes")?;
+        Some(TranscriptDigest::from_bytes(bytes))
+    } else {
+        None
+    };
+
+    let attest = match mode {
+        "intersection" => {
+            let int_root_hex =
+                intersection_root_hex.ok_or("intersection mode requires --intersection-root")?;
+            let int_root: [u8; 32] = hex::decode(int_root_hex)?
+                .try_into()
+                .map_err(|_| "intersection_root must be 32 bytes")?;
+
+            OverlapAttestation::sign_intersection(
+                &identity,
+                root_a,
+                root_b,
+                int_root,
+                session.map(|s| s.to_string()),
+                transcript,
+                ttl_secs,
+            )
+        }
+        "cardinality" => {
+            let card = cardinality.ok_or("cardinality mode requires --cardinality")?;
+
+            OverlapAttestation::sign_cardinality(
+                &identity,
+                root_a,
+                root_b,
+                card,
+                session.map(|s| s.to_string()),
+                transcript,
+                ttl_secs,
+            )
+        }
+        _ => return Err(format!("unknown mode: {mode}").into()),
+    };
+
+    let json = attest.to_json_pretty()?;
+
+    match output {
+        Some(path) => fs::write(path, &json)?,
+        None => println!("{json}"),
+    }
+
+    eprintln!("attestation_id: {}", hex::encode(attest.attestation_id()));
+    eprintln!("issuer: {}", attest.issuer_pubkey.to_hex());
+    eprintln!("mode: {:?}", attest.mode);
+    if let Some(ref sid) = attest.session_id {
+        eprintln!("session_id: {}", sid);
+    }
+    eprintln!("ttl_secs: {}", ttl_secs);
+    if let Some(remaining) = attest.remaining_secs() {
+        eprintln!("expires_in: {}s", remaining);
+    }
+
+    Ok(())
+}
+
+fn cmd_attest_verify(
+    attestation_path: &std::path::Path,
+    expect_issuer_hex: Option<&str>,
+    expect_session: Option<&str>,
+    verify_co_signature: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let attest = OverlapAttestation::load_from_file(attestation_path)?;
+
+    // Basic verification (signature + expiry)
+    attest.verify()?;
+
+    // Check issuer if specified
+    if let Some(hex) = expect_issuer_hex {
+        let expected = PublicIdentity::from_hex(hex)?;
+        attest.verify_issuer(&expected)?;
+    }
+
+    // Check session if specified
+    if let Some(session) = expect_session {
+        attest.verify_session(session)?;
+    }
+
+    // Check co-signature if requested
+    if verify_co_signature {
+        if attest.is_dual_signed() {
+            attest.verify_co_signature()?;
+            eprintln!("co-signature verification: OK");
+        } else {
+            eprintln!("warning: no co-signature present");
+        }
+    }
+
+    println!("Attestation verification: OK");
+    println!("  version: {}", attest.version);
+    println!("  mode: {:?}", attest.mode);
+    if let Some(ref sid) = attest.session_id {
+        println!("  session_id: {}", sid);
+    }
+    println!("  set_root_a: {}", hex::encode(attest.set_root_a));
+    println!("  set_root_b: {}", hex::encode(attest.set_root_b));
+    match attest.mode {
+        AttestationMode::Intersection => {
+            if let Some(ref root) = attest.intersection_root {
+                println!("  intersection_root: {}", hex::encode(root));
+            }
+        }
+        AttestationMode::Cardinality => {
+            if let Some(card) = attest.cardinality {
+                println!("  cardinality: {}", card);
+            }
+        }
+    }
+    if let Some(ref digest) = attest.transcript_digest {
+        println!("  transcript_digest: {}", digest);
+    }
+    println!("  issuer: {}", attest.issuer_pubkey.to_hex());
+    println!("  issued_at: {}", attest.issued_at);
+    println!("  expires_at: {}", attest.expires_at);
+    if let Some(remaining) = attest.remaining_secs() {
+        println!("  remaining: {}s", remaining);
+    } else {
+        println!("  remaining: (expired)");
+    }
+    if attest.is_dual_signed() {
+        println!("  dual_signed: yes");
+        if let Some(ref co_signer) = attest.co_signer_pubkey {
+            println!("  co_signer: {}", co_signer.to_hex());
+        }
+    }
+    println!("  attestation_id: {}", hex::encode(attest.attestation_id()));
 
     Ok(())
 }

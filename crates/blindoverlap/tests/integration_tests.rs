@@ -1993,3 +1993,278 @@ fn test_abort_message_with_reason_text() {
         _ => panic!(),
     }
 }
+
+// === PolicyProfile Tests (v0.7.0) ===
+
+use blindoverlap::{PolicyProfile, SessionParams};
+
+#[test]
+fn test_policy_profile_basic_check() {
+    let policy = PolicyProfile::builder("test-policy")
+        .require_trusted_peer(true)
+        .min_pad_to(64)
+        .build();
+
+    // Params that pass
+    let params_ok = SessionParams::builder()
+        .has_trusted_peer(true)
+        .pad_to(128)
+        .build();
+    assert!(policy.check(&params_ok).is_ok());
+
+    // Params that fail - no trusted peer
+    let params_fail = SessionParams::builder()
+        .has_trusted_peer(false)
+        .pad_to(128)
+        .build();
+    assert!(policy.check(&params_fail).is_err());
+}
+
+#[test]
+fn test_policy_profile_strict_example() {
+    let policy = PolicyProfile::strict("prod");
+
+    // Strict policy requires: trusted peer, min_pad 64, max_ttl 300, invite
+    let params_ok = SessionParams::builder()
+        .has_trusted_peer(true)
+        .pad_to(64)
+        .ttl_secs(300)
+        .has_invite(true)
+        .build();
+    assert!(policy.check(&params_ok).is_ok());
+
+    // Fails without invite
+    let params_no_invite = SessionParams::builder()
+        .has_trusted_peer(true)
+        .pad_to(64)
+        .ttl_secs(300)
+        .has_invite(false)
+        .build();
+    assert!(policy.check(&params_no_invite).is_err());
+}
+
+#[test]
+fn test_policy_profile_cardinality_only() {
+    let policy = PolicyProfile::builder("cardinality-only")
+        .allow_cardinality_only(true)
+        .build();
+
+    // Cardinality mode passes
+    let params_card = SessionParams::builder().is_intersection_mode(false).build();
+    assert!(policy.check(&params_card).is_ok());
+
+    // Intersection mode fails
+    let params_int = SessionParams::builder().is_intersection_mode(true).build();
+    assert!(policy.check(&params_int).is_err());
+}
+
+#[test]
+fn test_policy_profile_json_roundtrip() {
+    let policy = PolicyProfile::builder("roundtrip-test")
+        .require_trusted_peer(true)
+        .min_pad_to(256)
+        .max_ttl_secs(120)
+        .require_lease(true)
+        .build();
+
+    let json = policy.to_json_pretty().unwrap();
+    let restored = PolicyProfile::from_json(&json).unwrap();
+
+    assert_eq!(restored.name, policy.name);
+    assert_eq!(restored.require_trusted_peer, policy.require_trusted_peer);
+    assert_eq!(restored.min_pad_to, policy.min_pad_to);
+    assert_eq!(restored.max_ttl_secs, policy.max_ttl_secs);
+    assert_eq!(restored.require_lease, policy.require_lease);
+}
+
+// === OverlapAttestation Tests (v0.7.0) ===
+
+use blindoverlap::{AttestationMode, OverlapAttestation};
+
+#[test]
+fn test_attestation_intersection_sign_verify() {
+    let identity = PartyIdentity::generate();
+    let set_root_a = [1u8; 32];
+    let set_root_b = [2u8; 32];
+    let intersection_root = [3u8; 32];
+
+    let attest = OverlapAttestation::sign_intersection(
+        &identity,
+        set_root_a,
+        set_root_b,
+        intersection_root,
+        Some("attest-session".to_string()),
+        None,
+        3600,
+    );
+
+    assert!(attest.verify().is_ok());
+    assert_eq!(attest.mode, AttestationMode::Intersection);
+    assert_eq!(attest.intersection_root, Some(intersection_root));
+    assert!(attest.verify_session("attest-session").is_ok());
+}
+
+#[test]
+fn test_attestation_cardinality_sign_verify() {
+    let identity = PartyIdentity::generate();
+
+    let attest =
+        OverlapAttestation::sign_cardinality(&identity, [1u8; 32], [2u8; 32], 42, None, None, 3600);
+
+    assert!(attest.verify().is_ok());
+    assert_eq!(attest.mode, AttestationMode::Cardinality);
+    assert_eq!(attest.cardinality, Some(42));
+}
+
+#[test]
+fn test_attestation_dual_sign() {
+    let alice = PartyIdentity::generate();
+    let bob = PartyIdentity::generate();
+
+    let mut attest = OverlapAttestation::sign_intersection(
+        &alice, [1u8; 32], [2u8; 32], [3u8; 32], None, None, 3600,
+    );
+
+    assert!(!attest.is_dual_signed());
+
+    attest.co_sign(&bob);
+
+    assert!(attest.is_dual_signed());
+    assert!(attest.verify().is_ok());
+    assert!(attest.verify_co_signature().is_ok());
+}
+
+#[test]
+fn test_attestation_wrong_issuer_rejected() {
+    let alice = PartyIdentity::generate();
+    let bob = PartyIdentity::generate();
+
+    let attest = OverlapAttestation::sign_intersection(
+        &alice, [1u8; 32], [2u8; 32], [3u8; 32], None, None, 3600,
+    );
+
+    // Verify against wrong issuer fails
+    assert!(attest.verify_issuer(&bob.public()).is_err());
+
+    // Verify against correct issuer passes
+    assert!(attest.verify_issuer(&alice.public()).is_ok());
+}
+
+#[test]
+fn test_attestation_expired_rejected() {
+    let identity = PartyIdentity::generate();
+
+    // TTL of 0 means immediately expired
+    let attest = OverlapAttestation::sign_intersection(
+        &identity, [1u8; 32], [2u8; 32], [3u8; 32], None, None, 0,
+    );
+
+    assert!(attest.verify().is_err());
+}
+
+#[test]
+fn test_attestation_tampered_rejected() {
+    let identity = PartyIdentity::generate();
+
+    let mut attest = OverlapAttestation::sign_intersection(
+        &identity, [1u8; 32], [2u8; 32], [3u8; 32], None, None, 3600,
+    );
+
+    attest.signature[0] ^= 0xFF;
+
+    assert!(attest.verify().is_err());
+}
+
+#[test]
+fn test_attestation_json_roundtrip() {
+    let identity = PartyIdentity::generate();
+
+    let attest = OverlapAttestation::sign_intersection(
+        &identity,
+        [10u8; 32],
+        [20u8; 32],
+        [30u8; 32],
+        Some("json-session".to_string()),
+        None,
+        7200,
+    );
+
+    let json = attest.to_json_pretty().unwrap();
+    let restored = OverlapAttestation::from_json(&json).unwrap();
+
+    assert_eq!(restored.session_id, attest.session_id);
+    assert_eq!(restored.mode, attest.mode);
+    assert_eq!(restored.set_root_a, attest.set_root_a);
+    assert_eq!(restored.set_root_b, attest.set_root_b);
+    assert_eq!(restored.intersection_root, attest.intersection_root);
+
+    assert!(restored.verify().is_ok());
+}
+
+// === Policy + Attestation Integration ===
+
+#[test]
+fn test_policy_check_then_attest_result() {
+    let alice = PartyIdentity::generate();
+    let bob = PartyIdentity::generate();
+
+    // Check policy before starting session
+    let policy = PolicyProfile::builder("integration-policy")
+        .require_trusted_peer(true)
+        .build();
+
+    let params = SessionParams::builder().has_trusted_peer(true).build();
+
+    assert!(policy.check(&params).is_ok());
+
+    // Run PSI session
+    let set_a = make_set(&[json!({"x": 1}), json!({"x": 2}), json!({"x": 3})]);
+    let set_b = make_set(&[json!({"x": 2}), json!({"x": 3}), json!({"x": 4})]);
+
+    let mut initiator = InitiatorSession::with_channel_binding(
+        "policy-attest-session",
+        set_a.clone(),
+        IntersectionMode::Intersection,
+        &alice,
+        bob.public(),
+    )
+    .unwrap();
+
+    let mut responder = ResponderSession::with_channel_binding(
+        "policy-attest-session",
+        set_b.clone(),
+        IntersectionMode::Intersection,
+        &bob,
+        alice.public(),
+    )
+    .unwrap();
+
+    let offer = initiator.generate_offer().unwrap();
+    let reply = responder.process_offer_and_reply(&offer).unwrap();
+    let result = initiator.process_reply(&reply).unwrap();
+
+    let intersection_root = match result {
+        PsiResult::Intersection { root, ids } => {
+            assert_eq!(ids.len(), 2);
+            root
+        }
+        _ => panic!("expected intersection"),
+    };
+
+    // Create attestation of the result
+    let attest = OverlapAttestation::sign_intersection(
+        &alice,
+        *set_a.root(),
+        *set_b.root(),
+        intersection_root,
+        Some("policy-attest-session".to_string()),
+        None,
+        3600,
+    );
+
+    assert!(attest.verify().is_ok());
+    assert!(attest.verify_issuer(&alice.public()).is_ok());
+
+    // Bob can verify Alice's attestation
+    assert!(attest.verify_full(&alice.public()).is_ok());
+}
